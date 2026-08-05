@@ -1,0 +1,123 @@
+#!/bin/bash
+## conquest [slot] — Show a slot's config, then start/stop it, build it, or run a test against it
+
+SCRIPTS_DIR="/blox/adixon1/scripts"
+TESTS_DIR="$SCRIPTS_DIR/nios_test/tests"
+TICKETS_DIR="$SCRIPTS_DIR/tickets"
+
+slot="${1:-}"
+if [[ -z "$slot" ]]; then
+    echo ""
+    echo "  Slots:"
+    echo "    1) balerion"
+    echo "    2) drogon"
+    echo ""
+    read -rp "  Select slot: " sel
+    case "$sel" in
+        1|balerion) slot="balerion" ;;
+        2|drogon)   slot="drogon" ;;
+        *) echo "  Unknown slot: $sel" >&2; exit 1 ;;
+    esac
+fi
+
+case "$slot" in
+    balerion|drogon) ;;
+    *) echo "  Unknown slot: $slot (expected balerion or drogon)" >&2; exit 1 ;;
+esac
+
+echo ""
+echo "  ── $slot ──"
+slot status | awk -v slotname="$slot" '
+{
+    stripped = $0
+    gsub(/\x1b\[[0-9;]*m/, "", stripped)
+    gsub(/\*/, "", stripped)
+    if (stripped ~ ("^  " slotname "([[:space:]]|$)")) { printing = 1 }
+    else if (printing && stripped ~ /^[[:space:]]*$/) { exit }
+    if (printing) print
+}'
+echo ""
+
+declare -a option_kinds
+declare -a option_paths
+declare -a option_labels
+i=1
+
+echo "  Slot options:"
+for entry in "start:start container" "stop:stop container"; do
+    sub="${entry%%:*}"
+    label="${entry#*:}"
+    echo "    $i) $label"
+    option_kinds[$i]="slot_cmd"
+    option_paths[$i]="$sub"
+    option_labels[$i]="$label"
+    ((i++))
+done
+
+echo ""
+echo "  Build options:"
+for entry in "build_quick:quick build" "build:full build" "build_clean:clean build"; do
+    sub="${entry%%:*}"
+    label="${entry#*:}"
+    echo "    $i) $label"
+    option_kinds[$i]="slot_cmd"
+    option_paths[$i]="$sub"
+    option_labels[$i]="$label"
+    ((i++))
+done
+
+echo ""
+echo "  Library tests:"
+for f in "$TESTS_DIR"/test_*.py; do
+    [[ -f "$f" ]] || continue
+    name="$(basename "$f")"
+    echo "    $i) $name"
+    option_kinds[$i]="test"
+    option_paths[$i]="$f"
+    option_labels[$i]="$name"
+    ((i++))
+done
+if [[ -f "$TESTS_DIR/local_appliance.py" ]]; then
+    echo "    $i) local_appliance.py (destructive/slow — run manually with care)"
+    option_kinds[$i]="test"
+    option_paths[$i]="$TESTS_DIR/local_appliance.py"
+    option_labels[$i]="local_appliance.py"
+    ((i++))
+fi
+
+echo ""
+echo "  Ticket tests:"
+if [[ -d "$TICKETS_DIR" ]]; then
+    for d in "$TICKETS_DIR"/*/; do
+        [[ -d "$d" ]] || continue
+        ticket="$(basename "$d")"
+        for f in "$d"test_*.py; do
+            [[ -f "$f" ]] || continue
+            name="$(basename "$f")"
+            echo "    $i) [$ticket] $name"
+            option_kinds[$i]="test"
+            option_paths[$i]="$f"
+            option_labels[$i]="$name"
+            ((i++))
+        done
+    done
+fi
+
+echo ""
+read -rp "  Run which? [number, or enter to skip]: " choice
+if [[ -z "$choice" ]]; then
+    exit 0
+fi
+if [[ -z "${option_paths[$choice]:-}" ]]; then
+    echo "  Invalid selection" >&2
+    exit 1
+fi
+
+echo ""
+if [[ "${option_kinds[$choice]}" == "slot_cmd" ]]; then
+    echo "  Running ${option_labels[$choice]} on $slot..."
+    slot "${option_paths[$choice]}" "$slot"
+else
+    echo "  Running ${option_labels[$choice]}..."
+    python3 "${option_paths[$choice]}"
+fi

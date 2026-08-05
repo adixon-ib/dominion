@@ -1,0 +1,79 @@
+#!/usr/bin/env python3
+## verdict [run_id] — Colorized detail for a run; accepts a prefix (default: latest)
+"""verdict [run_id] — detailed view of a test run (default: latest)"""
+
+import os
+import re
+import sys
+from pathlib import Path
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from _common import B, DIM, GREEN, RED, YELLOW, CYAN, RST
+
+RESULTS_DIR = Path(os.environ.get("NIOS_TEST_OUTPUT_DIR", "/blox/adixon1/scripts/nios_test/results"))
+
+
+def find_run(arg):
+    if not RESULTS_DIR.exists():
+        return None
+    if arg:
+        # exact match first
+        exact = RESULTS_DIR / arg
+        if exact.exists():
+            return exact
+        # prefix match
+        for d in sorted(RESULTS_DIR.iterdir(), reverse=True):
+            if d.name.startswith(arg):
+                return d
+        return None
+    # latest
+    dirs = sorted(RESULTS_DIR.iterdir(), reverse=True)
+    return dirs[0] if dirs else None
+
+
+def colorize_line(line):
+    if re.match(r"^(Run|Script|Target):", line):
+        key, _, val = line.partition(":")
+        return f"  {CYAN}{B}{key}:{RST} {val.strip()}"
+    if re.match(r"^PASS\s", line):
+        name_part = line[5:].strip()
+        return f"  {GREEN}{B}PASS{RST}  {name_part}"
+    if re.match(r"^FAIL\s", line):
+        name_part = line[5:].strip()
+        return f"  {RED}{B}FAIL{RST}  {name_part}"
+    if re.match(r"^SKIP\s", line):
+        name_part = line[5:].strip()
+        return f"  {YELLOW}SKIP{RST}  {name_part}"
+    if re.match(r"^\d+ passed,", line):
+        # footer summary line
+        return f"\n  {B}{line}{RST}"
+    if line.startswith("      "):
+        # traceback indented under a FAIL
+        return f"{RED}{DIM}{line}{RST}"
+    if line.startswith("Logs:"):
+        return f"  {DIM}{line}{RST}"
+    return f"  {line}" if line.strip() else ""
+
+
+def main():
+    arg = sys.argv[1] if len(sys.argv) > 1 else None
+    run_dir = find_run(arg)
+
+    if not run_dir:
+        print(f"  {RED}no run found{RST}" + (f": {arg}" if arg else ""))
+        sys.exit(1)
+
+    summary = run_dir / "summary.txt"
+    if not summary.exists():
+        print(f"  {RED}no summary.txt in {run_dir.name}{RST}")
+        print(f"  Logs: {run_dir}/")
+        sys.exit(1)
+
+    print()
+    for line in summary.read_text().splitlines():
+        print(colorize_line(line))
+    print()
+
+
+if __name__ == "__main__":
+    main()

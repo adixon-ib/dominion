@@ -1,0 +1,66 @@
+#!/usr/bin/env python3
+## reckoning [N] — Full run history table (optional row count, e.g. reckoning 5)
+"""reckoning — full test run history"""
+
+import os
+import sys
+from pathlib import Path
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from _common import B, DIM, GREEN, RED, YELLOW, CYAN, RST, parse_summary, fmt_run_id
+
+RESULTS_DIR = Path(os.environ.get("NIOS_TEST_OUTPUT_DIR", "/blox/adixon1/scripts/nios_test/results"))
+
+
+def colored(text, color):
+    return f"{color}{text}{RST}"
+
+
+def status_cells(p, f, s):
+    """Return (pass_col, fail_col, skip_col, verdict_col) each pre-padded for display."""
+    W = 6
+    if p is None:
+        q = colored("?".ljust(W), DIM)
+        dash = colored("—", DIM)
+        return q, q, q, dash
+    p_s = str(p).ljust(W)
+    f_s = str(f).ljust(W)
+    s_s = str(s).ljust(W)
+    pc = colored(p_s, f"{GREEN}{B}") if p else colored(p_s, DIM)
+    fc = colored(f_s, f"{RED}{B}") if f else colored(f_s, DIM)
+    sc = colored(s_s, YELLOW) if s else colored(s_s, DIM)
+    verdict = colored("FAIL", f"{RED}{B}") if f else colored("PASS", GREEN)
+    return pc, fc, sc, verdict
+
+
+def main():
+    n = int(sys.argv[1]) if len(sys.argv) > 1 and sys.argv[1].isdigit() else None
+
+    if not RESULTS_DIR.exists():
+        print("  no results directory found")
+        return
+
+    runs = sorted(RESULTS_DIR.iterdir(), reverse=True)
+    if n:
+        runs = runs[:n]
+
+    print()
+    print(f"  {B}{CYAN}TEST RUNS{RST}  {DIM}({len(runs)} shown){RST}")
+    print(f"  {'─' * 19}  {'─' * 22}  {'─' * 14}  {'─' * 6}  {'─' * 6}  {'─' * 7}  {'─' * 6}")
+    print(f"  {'RUN':<19}  {'SCRIPT':<22}  {'TARGET':<14}  {'PASS':<6}  {'FAIL':<6}  {'SKIP':<7}  STATUS")
+    print(f"  {'─' * 19}  {'─' * 22}  {'─' * 14}  {'─' * 6}  {'─' * 6}  {'─' * 7}  {'─' * 6}")
+
+    for d in runs:
+        summary = d / "summary.txt"
+        info = parse_summary(summary) if summary.exists() else {"script": "—", "target": "—", "passed": None, "failed": None, "skipped": None}
+        ts     = fmt_run_id(d.name, fmt="%Y-%m-%d %H:%M:%S")
+        script = info["script"][:22]
+        target = info["target"][:14]
+        pc, fc, sc, verdict = status_cells(info["passed"], info["failed"], info["skipped"])
+        print(f"  {ts:<19}  {script:<22}  {target:<14}  {pc:<6}  {fc:<6}  {sc:<7}  {verdict}")
+
+    print()
+
+
+if __name__ == "__main__":
+    main()
