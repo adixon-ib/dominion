@@ -100,8 +100,7 @@ Dependencies: `console_connect` at `/import/tools/lab/bin/console_connect`, `add
 
 ## Unit tests vs integration tests
 
-The test suite is split into two directories with two different tools —
-see `PLAN-unit-integration-test-split.md` for the full rationale.
+The test suite is split into two directories with two different tools:
 
 - **`unit_tests/`** — pytest. Tests the library's *logic* (hash-mismatch
   detection, manifest construction, `docker inspect` JSON parsing, ANSI
