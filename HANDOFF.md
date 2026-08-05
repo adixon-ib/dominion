@@ -189,7 +189,6 @@ There is no `run_all.py`/`run.sh` anymore — `pytest integration_tests/` with m
 | `test_appliance.py` | 4 | appliance / ncc | Appliance + LocalAppliance shell/console sessions — SSH + local |
 | `test_deploy.py` | 5 + 1 skip | destructive | deploy_serial_console + deploy_token_py + deploy_token_stats_consumer (SSH appliance); deploy_token_py + deploy_token_stats_consumer (NCC); serial_console on NCC skipped (OverlayFS limitation) |
 | `test_grid.py` | 6 | destructive | Grid.from_config() against real lab VMs; whole file skips if `IMAGE_FILE` env var isn't set |
-| `test_sc_hello.py` | 5 | destructive, appliance | sequential E2E: revert → quick build → pre-check → deploy → post-check |
 | `test_local_appliance.py` | 7 | destructive, ncc | get_container_ip, appliance_ip (validates IP + transport type), host route, WAPI from host, shell + console via networked LocalAppliance, deploy_token_py on networked NCC |
 
 `destructive`-marked files are excluded by `pytest.ini`'s default `addopts = -m "not destructive"` — a structural guarantee (not "isn't listed somewhere") that they only run when asked for explicitly.
@@ -348,11 +347,11 @@ Bash aliases for working with nios_test from the command line. Defined in `~/.ba
 | `dominion` | Dashboard: slot status + last 5 test runs with pass/fail counts |
 | `reckoning [N]` | Full run history table. Optional count arg: `reckoning 5` |
 | `verdict [run_id]` | Colorized detail for a run. Default: latest. Accepts prefix: `verdict 2026-08-03_14` |
-| `invoke <test> [pytest args...]` | Run a test file via pytest. `.py` extension optional: `invoke test_sc_hello -m destructive` |
+| `invoke <test> [pytest args...]` | Run a test file via pytest. `.py` extension optional: `invoke test_local_appliance -m destructive` |
 
 Typical workflow:
 ```
-invoke test_sc_hello -m destructive   # run a test (destructive ones need -m destructive)
+invoke test_local_appliance -m destructive   # run a test (destructive ones need -m destructive)
 dominion                              # check result alongside slot status
 verdict                               # read full breakdown if something failed
 ```

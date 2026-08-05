@@ -1,24 +1,55 @@
 #!/bin/bash
-## conquest [slot] — Show a slot's config, then start/stop it, build it, or run a test against it
+## conquest [slot] — Show a slot's config, then browse categories (folders) and
+## multi-select one or more actions/tests to run from within each
 
 SCRIPTS_DIR="/blox/adixon1/scripts"
 TESTS_DIR="$SCRIPTS_DIR/nios_test/integration_tests"
 UNIT_TESTS_DIR="$SCRIPTS_DIR/nios_test/unit_tests"
 TICKETS_DIR="$SCRIPTS_DIR/tickets"
 
+if ! command -v whiptail >/dev/null 2>&1; then
+    echo "  conquest requires whiptail (not found on PATH)" >&2
+    exit 1
+fi
+
+get_slot_info() {
+    # $1: slot name. Prints that slot's filtered `slot status` block.
+    slot status | awk -v slotname="$1" '
+    {
+        stripped = $0
+        gsub(/\x1b\[[0-9;]*m/, "", stripped)
+        gsub(/\*/, "", stripped)
+        if (stripped ~ ("^  " slotname "([[:space:]]|$)")) { printing = 1 }
+        else if (printing && stripped ~ /^[[:space:]]*$/) { exit }
+        if (printing) print
+    }'
+}
+
 slot="${1:-}"
 if [[ -z "$slot" ]]; then
-    echo ""
-    echo "  Slots:"
-    echo "    1) balerion"
-    echo "    2) drogon"
-    echo ""
-    read -rp "  Select slot: " sel
-    case "$sel" in
-        1|balerion) slot="balerion" ;;
-        2|drogon)   slot="drogon" ;;
-        *) echo "  Unknown slot: $sel" >&2; exit 1 ;;
-    esac
+    # whiptail always restores the terminal between separate invocations on
+    # this system (confirmed — the documented --infobox "stays put" behavior
+    # didn't hold here), so any external command run *between* two whiptail
+    # calls shows up as a visible drop back to the plain terminal. The fix:
+    # do the slow part (querying both slots) before the picker ever appears,
+    # so picking a slot below needs zero further commands before the next
+    # whiptail screen — nothing left to cause a gap.
+    slot_info_balerion="$(get_slot_info balerion)"
+    slot_info_drogon="$(get_slot_info drogon)"
+
+    slot=$(whiptail --title "conquest" --cancel-button "Quit" \
+        --menu "Choose a slot" \
+        12 40 2 \
+        "balerion" "balerion" \
+        "drogon" "drogon" \
+        3>&1 1>&2 2>&3)
+    [[ $? -ne 0 ]] && exit 0
+
+    if [[ "$slot" == "balerion" ]]; then
+        slot_info="$slot_info_balerion"
+    else
+        slot_info="$slot_info_drogon"
+    fi
 fi
 
 case "$slot" in
@@ -26,87 +57,103 @@ case "$slot" in
     *) echo "  Unknown slot: $slot (expected balerion or drogon)" >&2; exit 1 ;;
 esac
 
-echo ""
-echo "  ── $slot ──"
-slot status | awk -v slotname="$slot" '
-{
-    stripped = $0
-    gsub(/\x1b\[[0-9;]*m/, "", stripped)
-    gsub(/\*/, "", stripped)
-    if (stripped ~ ("^  " slotname "([[:space:]]|$)")) { printing = 1 }
-    else if (printing && stripped ~ /^[[:space:]]*$/) { exit }
-    if (printing) print
-}'
-echo ""
+# Direct-arg invocation (conquest balerion) skips the picker above entirely,
+# so slot_info was never computed — do it now (first and only whiptail
+# screen in that path is the category menu right after, so no mid-flow gap).
+[[ -z "${slot_info:-}" ]] && slot_info="$(get_slot_info "$slot")"
 
 declare -a option_kinds
 declare -a option_paths
 declare -a option_labels
 declare -a option_extra
+declare -a option_desc      # whiptail's per-item description (no category prefix — the folder gives you that)
+declare -a option_category  # slot | build | unit | lib | ticket
 i=1
 
-echo "  Slot options:"
 for entry in "start:start container" "stop:stop container"; do
     sub="${entry%%:*}"
     label="${entry#*:}"
-    echo "    $i) $label"
     option_kinds[$i]="slot_cmd"
     option_paths[$i]="$sub"
     option_labels[$i]="$label"
+    option_desc[$i]="$label"
+    option_category[$i]="slot"
     ((i++))
 done
 
-echo ""
-echo "  Build options:"
 for entry in "build_quick:quick build" "build:full build" "build_clean:clean build"; do
     sub="${entry%%:*}"
     label="${entry#*:}"
-    echo "    $i) $label"
     option_kinds[$i]="slot_cmd"
     option_paths[$i]="$sub"
     option_labels[$i]="$label"
+    option_desc[$i]="$label"
+    option_category[$i]="build"
     ((i++))
 done
 
-echo ""
-echo "  Unit tests:"
 if [[ -d "$UNIT_TESTS_DIR" ]]; then
-    echo "    $i) run all (pytest unit_tests/)"
     option_kinds[$i]="unit_pytest"
     option_paths[$i]="$UNIT_TESTS_DIR"
     option_labels[$i]="pytest unit_tests/"
+    option_desc[$i]="run all (pytest unit_tests/)"
+    option_category[$i]="unit"
     ((i++))
+
+    for f in "$UNIT_TESTS_DIR"/test_*.py; do
+        [[ -f "$f" ]] || continue
+        name="$(basename "$f")"
+        option_kinds[$i]="unit_pytest"
+        option_paths[$i]="$f"
+        option_labels[$i]="$name"
+        option_desc[$i]="$name"
+        option_category[$i]="unit"
+        ((i++))
+    done
 fi
 
-echo ""
-echo "  Library tests (pytest):"
-for entry in "all:everything, non-destructive:" "appliance:appliance only, non-destructive:-m appliance" "ncc:NCC only, non-destructive:-m ncc" "destructive:destructive suite (opt-in — deploys real files/binaries):-m destructive"; do
+# NOTE: option_extra holds a bare marker EXPRESSION (no "-m", no quotes) —
+# the execution step below adds `-m "$marker"` itself with real shell
+# quoting. -m on the command line REPLACES pytest.ini's
+# `addopts = -m "not destructive"` rather than combining with it, so every
+# non-"all" entry must spell out "and not destructive" itself, or destructive
+# tests silently run too. Learned this the hard way: `-m appliance` alone
+# deployed real files to vm-04-89 via this exact menu.
+for entry in "all:everything, non-destructive:" "appliance:appliance only, non-destructive:appliance and not destructive" "ncc:NCC only, non-destructive:ncc and not destructive" "destructive:destructive suite (opt-in — deploys real files/binaries):destructive"; do
     key="${entry%%:*}"
     rest="${entry#*:}"
     label="${rest%%:*}"
-    marker_args="${rest#*:}"
-    echo "    $i) $label"
+    marker="${rest#*:}"
     option_kinds[$i]="integration_pytest"
     option_paths[$i]="$TESTS_DIR"
-    option_labels[$i]="pytest integration_tests/ $marker_args"
-    option_extra[$i]="$marker_args"
+    option_labels[$i]="pytest integration_tests/"
+    option_extra[$i]="$marker"
+    option_desc[$i]="$label"
+    option_category[$i]="lib"
     ((i++))
 done
-echo ""
-echo "  Library tests — single file (pytest):"
 for f in "$TESTS_DIR"/test_*.py; do
     [[ -f "$f" ]] || continue
     name="$(basename "$f")"
-    echo "    $i) $name"
     option_kinds[$i]="integration_pytest"
     option_paths[$i]="$f"
     option_labels[$i]="$name"
-    option_extra[$i]=""
+    option_category[$i]="lib"
+    # Files that are 100% @pytest.mark.destructive would otherwise silently
+    # select 0 tests under the default "-m not destructive" — opt them in.
+    case "$name" in
+        test_deploy.py|test_grid.py|test_local_appliance.py)
+            option_extra[$i]="destructive"
+            option_desc[$i]="$name (destructive)"
+            ;;
+        *)
+            option_extra[$i]=""
+            option_desc[$i]="$name"
+            ;;
+    esac
     ((i++))
 done
 
-echo ""
-echo "  Ticket tests:"
 if [[ -d "$TICKETS_DIR" ]]; then
     for d in "$TICKETS_DIR"/*/; do
         [[ -d "$d" ]] || continue
@@ -114,36 +161,90 @@ if [[ -d "$TICKETS_DIR" ]]; then
         for f in "$d"test_*.py; do
             [[ -f "$f" ]] || continue
             name="$(basename "$f")"
-            echo "    $i) [$ticket] $name"
             option_kinds[$i]="test"
             option_paths[$i]="$f"
             option_labels[$i]="$name"
+            option_desc[$i]="[$ticket] $name"
+            option_category[$i]="ticket"
             ((i++))
         done
     done
 fi
 
-echo ""
-read -rp "  Run which? [number, or enter to skip]: " choice
-if [[ -z "$choice" ]]; then
-    exit 0
-fi
-if [[ -z "${option_paths[$choice]:-}" ]]; then
-    echo "  Invalid selection" >&2
-    exit 1
-fi
+declare -A category_titles=(
+    [slot]="Slot options"
+    [build]="Build options"
+    [unit]="Unit tests"
+    [lib]="Library integration tests"
+    [ticket]="Ticket tests"
+)
+category_order=(slot build unit lib ticket)
 
-echo ""
-if [[ "${option_kinds[$choice]}" == "slot_cmd" ]]; then
-    echo "  Running ${option_labels[$choice]} on $slot..."
-    slot "${option_paths[$choice]}" "$slot"
-elif [[ "${option_kinds[$choice]}" == "unit_pytest" ]]; then
-    echo "  Running ${option_labels[$choice]}..."
-    pytest -q "${option_paths[$choice]}"
-elif [[ "${option_kinds[$choice]}" == "integration_pytest" ]]; then
-    echo "  Running pytest ${option_paths[$choice]} ${option_extra[$choice]}..."
-    pytest "${option_paths[$choice]}" ${option_extra[$choice]}
-else
-    echo "  Running ${option_labels[$choice]}..."
-    python3 "${option_paths[$choice]}"
-fi
+run_selected() {
+    # $1: space-separated list of option indices to run, in order
+    echo ""
+    for choice in $1; do
+        if [[ "${option_kinds[$choice]}" == "slot_cmd" ]]; then
+            echo "  Running ${option_labels[$choice]} on $slot..."
+            slot "${option_paths[$choice]}" "$slot"
+        elif [[ "${option_kinds[$choice]}" == "unit_pytest" ]]; then
+            echo "  Running ${option_labels[$choice]}..."
+            pytest -q "${option_paths[$choice]}"
+        elif [[ "${option_kinds[$choice]}" == "integration_pytest" ]]; then
+            marker="${option_extra[$choice]}"
+            if [[ -n "$marker" ]]; then
+                echo "  Running pytest ${option_paths[$choice]} -m \"$marker\"..."
+                pytest "${option_paths[$choice]}" -m "$marker"
+            else
+                echo "  Running pytest ${option_paths[$choice]}..."
+                pytest "${option_paths[$choice]}"
+            fi
+        else
+            echo "  Running ${option_labels[$choice]}..."
+            python3 "${option_paths[$choice]}"
+        fi
+        echo ""
+    done
+}
+
+while true; do
+    declare -a cat_items=()
+    for cat in "${category_order[@]}"; do
+        has_item=0
+        for idx in "${!option_category[@]}"; do
+            if [[ "${option_category[$idx]}" == "$cat" ]]; then
+                has_item=1
+                break
+            fi
+        done
+        [[ $has_item -eq 1 ]] || continue
+        cat_items+=("$cat" "${category_titles[$cat]}")
+    done
+
+    category=$(whiptail --title "conquest: $slot" --cancel-button "Quit" \
+        --menu "$slot_info
+
+Choose a category to open" \
+        30 100 "$(( ${#cat_items[@]} / 2 ))" \
+        "${cat_items[@]}" \
+        3>&1 1>&2 2>&3)
+    [[ $? -ne 0 ]] && break
+
+    declare -a wt_items=()
+    for idx in "${!option_desc[@]}"; do
+        [[ "${option_category[$idx]}" == "$category" ]] || continue
+        wt_items+=("$idx" "${option_desc[$idx]}" "off")
+    done
+
+    selection_raw=$(whiptail --title "conquest: $slot — ${category_titles[$category]}" --cancel-button "Back" \
+        --checklist "Select one or more to run (space to toggle, enter to confirm)" \
+        24 90 15 \
+        "${wt_items[@]}" \
+        3>&1 1>&2 2>&3)
+    [[ $? -ne 0 || -z "$selection_raw" ]] && continue
+
+    eval "selected=($selection_raw)"
+    run_selected "${selected[*]}"
+
+    read -rp "  Press enter to go back to categories..." _
+done
