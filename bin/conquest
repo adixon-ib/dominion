@@ -2,7 +2,8 @@
 ## conquest [slot] — Show a slot's config, then start/stop it, build it, or run a test against it
 
 SCRIPTS_DIR="/blox/adixon1/scripts"
-TESTS_DIR="$SCRIPTS_DIR/nios_test/tests"
+TESTS_DIR="$SCRIPTS_DIR/nios_test/integration_tests"
+UNIT_TESTS_DIR="$SCRIPTS_DIR/nios_test/unit_tests"
 TICKETS_DIR="$SCRIPTS_DIR/tickets"
 
 slot="${1:-}"
@@ -67,6 +68,16 @@ for entry in "build_quick:quick build" "build:full build" "build_clean:clean bui
 done
 
 echo ""
+echo "  Unit tests:"
+if [[ -d "$UNIT_TESTS_DIR" ]]; then
+    echo "    $i) run all (pytest unit_tests/)"
+    option_kinds[$i]="unit_pytest"
+    option_paths[$i]="$UNIT_TESTS_DIR"
+    option_labels[$i]="pytest unit_tests/"
+    ((i++))
+fi
+
+echo ""
 echo "  Library tests:"
 for f in "$TESTS_DIR"/test_*.py; do
     [[ -f "$f" ]] || continue
@@ -117,6 +128,9 @@ echo ""
 if [[ "${option_kinds[$choice]}" == "slot_cmd" ]]; then
     echo "  Running ${option_labels[$choice]} on $slot..."
     slot "${option_paths[$choice]}" "$slot"
+elif [[ "${option_kinds[$choice]}" == "unit_pytest" ]]; then
+    echo "  Running ${option_labels[$choice]}..."
+    pytest -q "${option_paths[$choice]}"
 else
     echo "  Running ${option_labels[$choice]}..."
     python3 "${option_paths[$choice]}"

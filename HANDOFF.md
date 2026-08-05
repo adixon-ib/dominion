@@ -98,11 +98,45 @@ When an `Appliance` is constructed (always SSH), `_ensure_ssh()` runs automatica
 
 Dependencies: `console_connect` at `/import/tools/lab/bin/console_connect`, `addkeys` at `/import/tools/qa/bin/addkeys` — both are in PATH on dev machines.
 
-## Test infrastructure
+## Unit tests vs integration tests
+
+The test suite is split into two directories with two different tools —
+see `PLAN-unit-integration-test-split.md` for the full rationale.
+
+- **`unit_tests/`** — pytest. Tests the library's *logic* (hash-mismatch
+  detection, manifest construction, `docker inspect` JSON parsing, ANSI
+  stripping, tag-file XML parsing, SSH-enable branching, etc.) against a
+  `FakeTransport`/`FakeChild` double defined in `conftest.py`. No docker, no
+  ssh, no pexpect spawn, no network — safe to run anywhere, in any order.
+  Run with `pytest scripts/nios_test/unit_tests/` or bare `pytest` from
+  `scripts/nios_test/` (a root `pytest.ini` scopes collection to
+  `unit_tests/` only — see below for why that guard exists).
+- **`integration_tests/`** (renamed from `tests/`) — the original custom
+  harness (`test()`/`skip()`/`summary()` in `helpers.py`). Tests the
+  library's *use* against real targets (vm-04-89, balerion). Unchanged by
+  the split except: `test_container.py`/`test_appliance.py` had their
+  config-validation and `from_config()`-wiring functions removed (moved to
+  `unit_tests/`, since those needed no I/O in the first place).
+
+**Why integration tests didn't move to pytest**: `summary()` writes
+`results/<timestamp>/summary.txt`, which `dominion`/`reckoning`/`verdict`
+parse directly, and every integration test file runs real SSH/`docker
+exec`/pexpect calls *at module import time* (gated by
+`should_run_appliance()`/`should_run_ncc()`), not inside test functions.
+Pointing pytest at `integration_tests/` directly would execute that network
+I/O during collection — confirmed while building this split: a bare
+`pytest` run from `scripts/nios_test/` with no `pytest.ini` guard collected
+`integration_tests/test_appliance.py` and crashed pytest outright (the
+file's own `summary()` calls `sys.exit()` at import time, which pytest's
+collector doesn't expect). The root `scripts/nios_test/pytest.ini` and
+`unit_tests/pytest.ini` (`testpaths`) both exist specifically to prevent
+this regardless of which directory `pytest` is invoked from.
+
+## Integration test infrastructure
 
 ### Location
 
-`/blox/adixon1/scripts/nios_test/tests/`
+`/blox/adixon1/scripts/nios_test/integration_tests/`
 
 ### Targets
 
@@ -115,13 +149,13 @@ Dependencies: `console_connect` at `/import/tools/lab/bin/console_connect`, `add
 
 ```bash
 # All tests, both targets
-python3 scripts/nios_test/tests/run_all.py --target all
+python3 scripts/nios_test/integration_tests/run_all.py --target all
 
 # Override log output directory
-python3 scripts/nios_test/tests/run_all.py --target all --output-dir /other/path
+python3 scripts/nios_test/integration_tests/run_all.py --target all --output-dir /other/path
 
 # Individual file
-NIOS_TEST_TARGET=ncc python3 scripts/nios_test/tests/test_container.py
+NIOS_TEST_TARGET=ncc python3 scripts/nios_test/integration_tests/test_container.py
 ```
 
 Default log level is `info`, controlled by the `LOG_LEVEL` constant in helpers.py — change it there to affect all test output at once.
@@ -132,15 +166,15 @@ Default log level is `info`, controlled by the `LOG_LEVEL` constant in helpers.p
 |---|---|---|
 | `test_transport.py` | 11 | run, run_on_host, is_container_running, checksum, host_checksum, upload — SSH + local |
 | `test_session.py` | 5 | ShellSession echo + hostname (SSH), ConsoleSession show status (SSH + local), ShellSession echo (local) |
-| `test_container.py` | 10 | ContainerConfig validation, NiosContainer.from_config() transport/logger, shell/console sessions — SSH + local |
-| `test_appliance.py` | 9 | ApplianceConfig + LocalApplianceConfig validation, Appliance + LocalAppliance construction and transport routing, repr — unit tests + NCC + SSH integration |
+| `test_container.py` | 4 | NiosContainer/LocalNiosContainer shell/console sessions — SSH + local |
+| `test_appliance.py` | 4 | Appliance + LocalAppliance shell/console sessions — SSH + local |
 | `test_deploy.py` | 5 + 1 skip | deploy_serial_console + deploy_token_py + deploy_token_stats_consumer (SSH appliance); deploy_token_py + deploy_token_stats_consumer (NCC); serial_console on NCC skipped (OverlayFS limitation) |
 | `local_appliance.py` | 7 | get_container_ip, appliance_ip (validates IP + transport type), host route, WAPI from host, shell + console via networked LocalAppliance, deploy_token_py on networked NCC |
 
 `local_appliance.py` is not in `run_all.py` — it's destructive and slow. Run manually:
 
 ```bash
-python3 scripts/nios_test/tests/local_appliance.py
+python3 scripts/nios_test/integration_tests/local_appliance.py
 ```
 
 No environment variables required. If balerion is already networked, the pre-check detects it and skips `set_network()`.
@@ -236,7 +270,7 @@ Ongoing refactoring and improvement of the library. Open areas:
 - **`local` flag redundancy in `ConsoleSession`**: The `local: bool` parameter in `ConsoleSession.__init__` is redundant — passing a non-None `container_name` is sufficient to take the `docker exec` path. The flag adds no behavior but could mislead readers. Consider removing it and relying solely on `container_name`.
 - **`constants.py` not exported from `__init__.py`**: Constants are internal. `WAPI_VERSION`, `NIOS_CONSOLE_USER`, and `NIOS_CONSOLE_PASSWORD` are now re-exported from `helpers.py` for test use. Decide whether any constants belong in the public `__init__.py` API for library consumers outside the test suite.
 - **Session timeout defaults not using constants**: Group B timeouts (30s shell, 60s console, 15s password prompt) are still hardcoded in `session.py` and `container.py`. These could move to `constants.py` alongside Group A — lower priority since they're not NIOS-specific domain knowledge.
-- **Test coverage for `LocalNiosContainer`**: `test_container.py` tests `NiosContainer` but may not fully cover `LocalNiosContainer`-specific methods (`get_container_ip`, `set_network`, `_find_forwarding_bridge`). Those paths are exercised by `local_appliance.py` but not in the structured test suite.
+- ~~**Test coverage for `LocalNiosContainer`**~~ — closed. `unit_tests/test_container.py` now covers `_get_container_network`, `_find_forwarding_bridge`, and `set_network` directly against a `FakeTransport` (no real docker/network needed). See "Unit tests vs integration tests" below.
 
 ---
 

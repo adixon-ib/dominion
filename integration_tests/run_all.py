@@ -2,7 +2,7 @@
 """Run all nios_test integration tests.
 
 Usage:
-    python3 -m nios_test.tests.run_all [--target appliance|ncc|all]
+    python3 -m nios_test.integration_tests.run_all [--target appliance|ncc|all]
 
 Runs test files in dependency order: transport → session → deploy.
 """
