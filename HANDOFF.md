@@ -111,26 +111,34 @@ see `PLAN-unit-integration-test-split.md` for the full rationale.
   Run with `pytest scripts/nios_test/unit_tests/` or bare `pytest` from
   `scripts/nios_test/` (a root `pytest.ini` scopes collection to
   `unit_tests/` only — see below for why that guard exists).
-- **`integration_tests/`** (renamed from `tests/`) — the original custom
-  harness (`test()`/`skip()`/`summary()` in `helpers.py`). Tests the
-  library's *use* against real targets (vm-04-89, balerion). Unchanged by
-  the split except: `test_container.py`/`test_appliance.py` had their
-  config-validation and `from_config()`-wiring functions removed (moved to
-  `unit_tests/`, since those needed no I/O in the first place).
+- **`integration_tests/`** (renamed from `tests/`) — also pytest (migrated
+  from a custom `test()`/`skip()`/`summary()` harness in a later pass).
+  Tests the library's *use* against real targets (vm-04-89, balerion), via
+  fixtures in `conftest.py` instead of the old module-level
+  `if should_run_appliance() and is_appliance_up(): ...` blocks. See
+  "Integration test infrastructure" below.
 
-**Why integration tests didn't move to pytest**: `summary()` writes
-`results/<timestamp>/summary.txt`, which `dominion`/`reckoning`/`verdict`
-parse directly, and every integration test file runs real SSH/`docker
-exec`/pexpect calls *at module import time* (gated by
-`should_run_appliance()`/`should_run_ncc()`), not inside test functions.
-Pointing pytest at `integration_tests/` directly would execute that network
-I/O during collection — confirmed while building this split: a bare
-`pytest` run from `scripts/nios_test/` with no `pytest.ini` guard collected
-`integration_tests/test_appliance.py` and crashed pytest outright (the
-file's own `summary()` calls `sys.exit()` at import time, which pytest's
-collector doesn't expect). The root `scripts/nios_test/pytest.ini` and
-`unit_tests/pytest.ini` (`testpaths`) both exist specifically to prevent
-this regardless of which directory `pytest` is invoked from.
+**Why `unit_tests/` and `integration_tests/` are still two separate pytest
+directories, not one**: `integration_tests/` requires real infrastructure
+(vm-04-89 reachable, balerion running) and its fixtures do real SSH/`docker
+exec`/pexpect work — that's the whole point, but it means a bare `pytest`
+run must never accidentally wander into it. The root `scripts/nios_test/
+pytest.ini` and `unit_tests/pytest.ini` (`testpaths`) both scope collection
+to `unit_tests/` only; running integration tests always requires explicitly
+pointing pytest at `integration_tests/` (`pytest integration_tests/`), an
+intentional, explicit action. `integration_tests/pytest.ini`'s own
+`addopts = -m "not destructive"` adds a second layer of default safety: even
+when explicitly pointed there, tests that deploy real files/binaries or
+reboot a target don't run unless you ask for `-m destructive` by name.
+
+Initially (earlier in this library's life) integration tests stayed on the
+custom harness specifically because every file did real network I/O *at
+module import time*, which would have executed during pytest collection —
+confirmed by testing it: a bare `pytest` run once collected
+`integration_tests/test_appliance.py` in its old form and crashed outright
+(its `summary()` called `sys.exit()` at import time). Migrating properly
+meant moving all of that into fixtures (lazy — only run when a test actually
+requests them) and markers, which is what `conftest.py` now does.
 
 ## Integration test infrastructure
 
@@ -148,43 +156,67 @@ this regardless of which directory `pytest` is invoked from.
 ### Running
 
 ```bash
-# All tests, both targets
-python3 scripts/nios_test/integration_tests/run_all.py --target all
+# Everything, non-destructive (default — pytest.ini's addopts excludes destructive)
+pytest integration_tests/
 
-# Override log output directory
-python3 scripts/nios_test/integration_tests/run_all.py --target all --output-dir /other/path
+# One target only
+pytest integration_tests/ -m appliance
+pytest integration_tests/ -m ncc
 
-# Individual file
-NIOS_TEST_TARGET=ncc python3 scripts/nios_test/integration_tests/test_container.py
+# The destructive suite — explicit opt-in required
+pytest integration_tests/ -m destructive
+pytest integration_tests/ -m "destructive and appliance"
+
+# One file
+pytest integration_tests/test_container.py -m ncc
+
+# --target is a thin convenience wrapper around marker selection, kept for
+# continuity with the pre-pytest CLI:
+pytest integration_tests/ --target ncc
 ```
 
-Default log level is `info`, controlled by the `LOG_LEVEL` constant in helpers.py — change it there to affect all test output at once.
+Default log level is `info`, controlled by the `LOG_LEVEL` constant in helpers.py — change it there to affect all test output at once. Results (including `junit.xml`, read by `dominion`/`reckoning`/`verdict`) land in a fresh `results/<YYYY-MM-DD_HH-MM-SS>/` directory automatically — no flag needed, `conftest.py`'s `pytest_configure` wires it up.
+
+There is no `run_all.py`/`run.sh` anymore — `pytest integration_tests/` with marker expressions replaced both.
 
 ### Test files
 
-| File | Tests | What it covers |
-|---|---|---|
-| `test_transport.py` | 11 | run, run_on_host, is_container_running, checksum, host_checksum, upload — SSH + local |
-| `test_session.py` | 5 | ShellSession echo + hostname (SSH), ConsoleSession show status (SSH + local), ShellSession echo (local) |
-| `test_container.py` | 4 | NiosContainer/LocalNiosContainer shell/console sessions — SSH + local |
-| `test_appliance.py` | 4 | Appliance + LocalAppliance shell/console sessions — SSH + local |
-| `test_deploy.py` | 5 + 1 skip | deploy_serial_console + deploy_token_py + deploy_token_stats_consumer (SSH appliance); deploy_token_py + deploy_token_stats_consumer (NCC); serial_console on NCC skipped (OverlayFS limitation) |
-| `local_appliance.py` | 7 | get_container_ip, appliance_ip (validates IP + transport type), host route, WAPI from host, shell + console via networked LocalAppliance, deploy_token_py on networked NCC |
+| File | Tests | Marked | What it covers |
+|---|---|---|---|
+| `test_transport.py` | 11 | appliance / ncc | run, run_on_host, is_container_running, checksum, host_checksum, upload — SSH + local |
+| `test_session.py` | 5 | appliance / ncc | ShellSession echo + hostname (SSH), ConsoleSession show status (SSH + local), ShellSession echo (local) |
+| `test_container.py` | 4 | appliance / ncc | NiosContainer/LocalNiosContainer shell/console sessions — SSH + local |
+| `test_appliance.py` | 4 | appliance / ncc | Appliance + LocalAppliance shell/console sessions — SSH + local |
+| `test_deploy.py` | 5 + 1 skip | destructive | deploy_serial_console + deploy_token_py + deploy_token_stats_consumer (SSH appliance); deploy_token_py + deploy_token_stats_consumer (NCC); serial_console on NCC skipped (OverlayFS limitation) |
+| `test_grid.py` | 6 | destructive | Grid.from_config() against real lab VMs; whole file skips if `IMAGE_FILE` env var isn't set |
+| `test_sc_hello.py` | 5 | destructive, appliance | sequential E2E: revert → quick build → pre-check → deploy → post-check |
+| `test_local_appliance.py` | 7 | destructive, ncc | get_container_ip, appliance_ip (validates IP + transport type), host route, WAPI from host, shell + console via networked LocalAppliance, deploy_token_py on networked NCC |
 
-`local_appliance.py` is not in `run_all.py` — it's destructive and slow. Run manually:
+`destructive`-marked files are excluded by `pytest.ini`'s default `addopts = -m "not destructive"` — a structural guarantee (not "isn't listed somewhere") that they only run when asked for explicitly.
 
-```bash
-python3 scripts/nios_test/integration_tests/local_appliance.py
-```
+### conftest.py
 
-No environment variables required. If balerion is already networked, the pre-check detects it and skips `set_network()`.
+Replaces the old `test()`/`skip()`/`summary()` harness. Session-scoped fixtures
+build the real `Appliance`/`LocalAppliance`/`NiosContainer`/`LocalNiosContainer`
+instances once per pytest run (`ssh_appliance`, `ssh_transport`, `ssh_container`,
+`local_ncc_container`, `local_transport`, `local_appliance`,
+`local_networked_appliance`), calling `pytest.skip()` internally if the target
+is down — instead of the old repeated `if should_run_appliance() and
+is_appliance_up(): ... elif ...: skip(...) else: skip(...)` block in every
+file. Also registers the `appliance`/`ncc`/`destructive` markers, the
+`--target` option, and wires up the timestamped `results/` dir + junit-xml
+path automatically via `pytest_configure`.
 
 ### helpers.py
+
+Trimmed to config factories and up/down checks only — the harness bits
+(`test()`, `skip()`, `summary()`, `should_run_appliance()`/`should_run_ncc()`)
+are gone, superseded by conftest.py's fixtures/markers.
 
 Constants:
 - `DEFAULT_HOSTNAME = "vm-04-89"`, `DEFAULT_IP = "10.35.211.4"`, `DEFAULT_CHROOT`, `DEFAULT_CONTAINER`, `DEFAULT_WORKTREE`
 - `LOG_LEVEL = "info"` — controls console and file log format for all test factories. Edit this one constant to change log verbosity across all tests.
-- `OUTPUT_DIR` — per-run subdirectory: `_RESULTS_BASE/<YYYY-MM-DD_HH-MM-SS>/`. Base defaults to `/blox/adixon1/scripts/nios_test/results`, overridable via `NIOS_TEST_OUTPUT_DIR` env. Timestamp is fixed at import time — all loggers in one run share the same subdirectory.
+- `OUTPUT_DIR` — `None` until `conftest.py`'s `pytest_configure` sets it once per session to the fresh `results/<YYYY-MM-DD_HH-MM-SS>/` dir (same dir `junit.xml` goes into). Base defaults to `/blox/adixon1/scripts/nios_test/results`, overridable via `NIOS_TEST_OUTPUT_DIR` env.
 - `WAPI_VERSION`, `NIOS_CONSOLE_USER`, `NIOS_CONSOLE_PASSWORD` — imported from `nios_test.constants` and re-exported; test files import these from helpers rather than from `nios_test.constants` directly.
 
 Factories (all default to `log_level=LOG_LEVEL`):
@@ -195,11 +227,10 @@ Factories (all default to `log_level=LOG_LEVEL`):
 
 Helpers:
 - `get_ncc_ip(retries=10, interval=5) -> str | None` — pre-check: gets the container IP via `docker inspect`, then polls WAPI inside the container (curl via `docker exec`). Returns the IP if WAPI responds, `None` if it doesn't within `retries` attempts. Use this before constructing `LocalAppliance` to avoid triggering `set_network()` when the network is already configured. Retry logic handles the brief window where httpd is restarting after a deploy.
-- `should_run_appliance()` / `should_run_ncc()` — target filtering via `NIOS_TEST_TARGET`
-- `test(name, fn)`, `skip(name, reason)`, `summary()` — test harness
-- `resolve_ip()` — reads argv (skipping `--` args), then `NIOS_IP` env, then default IP
+- `is_appliance_up()` / `is_ncc_up()` — used inside conftest.py fixtures to decide whether to `pytest.skip()`
+- `resolve_ip()` — reads `NIOS_IP` env, falling back to `DEFAULT_IP`. The old positional `[IP]` CLI argument convention is gone — pytest's positional args are file/dir paths to collect, not appliance IPs.
 
-Test files import nios_test types (`Appliance`, `NiosContainer`, etc.) directly from `nios_test`, not via helpers. Helpers only exports constants, factories, and harness utilities.
+Test files import nios_test types (`Appliance`, `NiosContainer`, etc.) directly from `nios_test`, not via helpers. Helpers only exports constants, factories, and up/down checks.
 
 ## set_network() — NCC networking
 
@@ -252,7 +283,7 @@ scripts/
 
 **Convention**: `tickets/<TICKET-ID>/test_<description>.py`
 
-**Pattern**: deploy the changed files first, then assert the specific behaviour the ticket fixes. Tests are scenario-based (not layer-based), may have manual operator steps (using `input()` to pause), and are tied to a specific worktree. They are never added to `run_all.py`.
+**Pattern**: deploy the changed files first, then assert the specific behaviour the ticket fixes. Tests are scenario-based (not layer-based), may have manual operator steps (using `input()` to pause), and are tied to a specific worktree. They are standalone scripts (run directly via `python3`), not part of the `integration_tests/` pytest suite, and out of scope for the pytest migration described above.
 
 **NIOSRFE-10314** (`test_aggregator_lifecycle.py`): Verifies `token_aggregator_service` starts/stops correctly across token mode transitions. Deploys `token_service_monitor` + `token_aggregator_service` from `DEFAULT_CHROOT`, then walks through 4 phases (Licensed baseline → enable token mode → reset all → re-enable). Phases 2–4 pause for operator input. Set `SKIP_DEPLOY=1` to skip binary deployment and run assertions only.
 
@@ -317,13 +348,13 @@ Bash aliases for working with nios_test from the command line. Defined in `~/.ba
 | `dominion` | Dashboard: slot status + last 5 test runs with pass/fail counts |
 | `reckoning [N]` | Full run history table. Optional count arg: `reckoning 5` |
 | `verdict [run_id]` | Colorized detail for a run. Default: latest. Accepts prefix: `verdict 2026-08-03_14` |
-| `invoke <test>` | Run a test file directly. `.py` extension optional: `invoke test_sc_hello` |
+| `invoke <test> [pytest args...]` | Run a test file via pytest. `.py` extension optional: `invoke test_sc_hello -m destructive` |
 
 Typical workflow:
 ```
-invoke test_sc_hello   # run a test
-dominion               # check result alongside slot status
-verdict                # read full breakdown if something failed
+invoke test_sc_hello -m destructive   # run a test (destructive ones need -m destructive)
+dominion                              # check result alongside slot status
+verdict                               # read full breakdown if something failed
 ```
 
 Run IDs shown in `reckoning` are the directory names under `nios_test/results/`.

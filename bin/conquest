@@ -42,6 +42,7 @@ echo ""
 declare -a option_kinds
 declare -a option_paths
 declare -a option_labels
+declare -a option_extra
 i=1
 
 echo "  Slot options:"
@@ -78,23 +79,31 @@ if [[ -d "$UNIT_TESTS_DIR" ]]; then
 fi
 
 echo ""
-echo "  Library tests:"
+echo "  Library tests (pytest):"
+for entry in "all:everything, non-destructive:" "appliance:appliance only, non-destructive:-m appliance" "ncc:NCC only, non-destructive:-m ncc" "destructive:destructive suite (opt-in — deploys real files/binaries):-m destructive"; do
+    key="${entry%%:*}"
+    rest="${entry#*:}"
+    label="${rest%%:*}"
+    marker_args="${rest#*:}"
+    echo "    $i) $label"
+    option_kinds[$i]="integration_pytest"
+    option_paths[$i]="$TESTS_DIR"
+    option_labels[$i]="pytest integration_tests/ $marker_args"
+    option_extra[$i]="$marker_args"
+    ((i++))
+done
+echo ""
+echo "  Library tests — single file (pytest):"
 for f in "$TESTS_DIR"/test_*.py; do
     [[ -f "$f" ]] || continue
     name="$(basename "$f")"
     echo "    $i) $name"
-    option_kinds[$i]="test"
+    option_kinds[$i]="integration_pytest"
     option_paths[$i]="$f"
     option_labels[$i]="$name"
+    option_extra[$i]=""
     ((i++))
 done
-if [[ -f "$TESTS_DIR/local_appliance.py" ]]; then
-    echo "    $i) local_appliance.py (destructive/slow — run manually with care)"
-    option_kinds[$i]="test"
-    option_paths[$i]="$TESTS_DIR/local_appliance.py"
-    option_labels[$i]="local_appliance.py"
-    ((i++))
-fi
 
 echo ""
 echo "  Ticket tests:"
@@ -131,6 +140,9 @@ if [[ "${option_kinds[$choice]}" == "slot_cmd" ]]; then
 elif [[ "${option_kinds[$choice]}" == "unit_pytest" ]]; then
     echo "  Running ${option_labels[$choice]}..."
     pytest -q "${option_paths[$choice]}"
+elif [[ "${option_kinds[$choice]}" == "integration_pytest" ]]; then
+    echo "  Running pytest ${option_paths[$choice]} ${option_extra[$choice]}..."
+    pytest "${option_paths[$choice]}" ${option_extra[$choice]}
 else
     echo "  Running ${option_labels[$choice]}..."
     python3 "${option_paths[$choice]}"

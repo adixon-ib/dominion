@@ -3,12 +3,11 @@
 """verdict [run_id] — detailed view of a test run (default: latest)"""
 
 import os
-import re
 import sys
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from _common import B, DIM, GREEN, RED, YELLOW, CYAN, RST
+from _common import B, DIM, GREEN, RED, YELLOW, CYAN, RST, parse_junit
 
 RESULTS_DIR = Path(os.environ.get("NIOS_TEST_OUTPUT_DIR", "/blox/adixon1/scripts/nios_test/results"))
 
@@ -31,28 +30,12 @@ def find_run(arg):
     return dirs[0] if dirs else None
 
 
-def colorize_line(line):
-    if re.match(r"^(Run|Script|Target):", line):
-        key, _, val = line.partition(":")
-        return f"  {CYAN}{B}{key}:{RST} {val.strip()}"
-    if re.match(r"^PASS\s", line):
-        name_part = line[5:].strip()
-        return f"  {GREEN}{B}PASS{RST}  {name_part}"
-    if re.match(r"^FAIL\s", line):
-        name_part = line[5:].strip()
-        return f"  {RED}{B}FAIL{RST}  {name_part}"
-    if re.match(r"^SKIP\s", line):
-        name_part = line[5:].strip()
-        return f"  {YELLOW}SKIP{RST}  {name_part}"
-    if re.match(r"^\d+ passed,", line):
-        # footer summary line
-        return f"\n  {B}{line}{RST}"
-    if line.startswith("      "):
-        # traceback indented under a FAIL
-        return f"{RED}{DIM}{line}{RST}"
-    if line.startswith("Logs:"):
-        return f"  {DIM}{line}{RST}"
-    return f"  {line}" if line.strip() else ""
+def print_case(case):
+    color = {"PASS": f"{GREEN}{B}", "FAIL": f"{RED}{B}", "SKIP": YELLOW}[case["status"]]
+    print(f"  {color}{case['status']}{RST}  {case['name']}  {DIM}({case['duration']:.1f}s){RST}")
+    if case["message"]:
+        for line in case["message"].rstrip().splitlines():
+            print(f"{RED if case['status'] == 'FAIL' else YELLOW}{DIM}      {line}{RST}")
 
 
 def main():
@@ -63,15 +46,26 @@ def main():
         print(f"  {RED}no run found{RST}" + (f": {arg}" if arg else ""))
         sys.exit(1)
 
-    summary = run_dir / "summary.txt"
-    if not summary.exists():
-        print(f"  {RED}no summary.txt in {run_dir.name}{RST}")
+    junit = run_dir / "junit.xml"
+    if not junit.exists():
+        print(f"  {RED}no junit.xml in {run_dir.name}{RST}")
         print(f"  Logs: {run_dir}/")
         sys.exit(1)
 
+    info = parse_junit(junit)
+
     print()
-    for line in summary.read_text().splitlines():
-        print(colorize_line(line))
+    print(f"  {CYAN}{B}Run:{RST} {run_dir.name}")
+    print(f"  {CYAN}{B}Script:{RST} {info['script']}")
+    print(f"  {CYAN}{B}Target:{RST} {info['target']}")
+    print()
+    for case in info["cases"]:
+        print_case(case)
+
+    total = (info["passed"] or 0) + (info["failed"] or 0) + (info["skipped"] or 0)
+    print()
+    print(f"  {B}{info['passed']} passed, {info['failed']} failed, {info['skipped']} skipped out of {total}{RST}")
+    print(f"  {DIM}Logs: {run_dir}/{RST}")
     print()
 
 

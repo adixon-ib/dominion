@@ -9,7 +9,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from _common import B, DIM, GREEN, RED, YELLOW, CYAN, RST, parse_summary, fmt_run_id, latest_run_age
+from _common import B, DIM, GREEN, RED, YELLOW, CYAN, RST, parse_junit, fmt_run_id, latest_run_age
 
 SLOTS_JSON  = Path("/blox/adixon1/.slots.json")
 RESULTS_DIR = Path(os.environ.get("NIOS_TEST_OUTPUT_DIR", "/blox/adixon1/scripts/nios_test/results"))
@@ -32,8 +32,8 @@ def load_runs(n=5):
         return []
     runs = []
     for d in sorted(RESULTS_DIR.iterdir(), reverse=True)[:n]:
-        summary = d / "summary.txt"
-        info = parse_summary(summary) if summary.exists() else {"script": "—", "target": "—", "passed": None, "failed": None, "skipped": None}
+        junit = d / "junit.xml"
+        info = parse_junit(junit) if junit.exists() else {"script": "—", "target": "—", "passed": None, "failed": None, "skipped": None}
         info["run_id"] = d.name
         runs.append(info)
     return runs

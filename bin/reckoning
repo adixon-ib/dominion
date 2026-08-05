@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from _common import B, DIM, GREEN, RED, YELLOW, CYAN, RST, parse_summary, fmt_run_id
+from _common import B, DIM, GREEN, RED, YELLOW, CYAN, RST, parse_junit, fmt_run_id
 
 RESULTS_DIR = Path(os.environ.get("NIOS_TEST_OUTPUT_DIR", "/blox/adixon1/scripts/nios_test/results"))
 
@@ -51,8 +51,8 @@ def main():
     print(f"  {'─' * 19}  {'─' * 22}  {'─' * 14}  {'─' * 6}  {'─' * 6}  {'─' * 7}  {'─' * 6}")
 
     for d in runs:
-        summary = d / "summary.txt"
-        info = parse_summary(summary) if summary.exists() else {"script": "—", "target": "—", "passed": None, "failed": None, "skipped": None}
+        junit = d / "junit.xml"
+        info = parse_junit(junit) if junit.exists() else {"script": "—", "target": "—", "passed": None, "failed": None, "skipped": None}
         ts     = fmt_run_id(d.name, fmt="%Y-%m-%d %H:%M:%S")
         script = info["script"][:22]
         target = info["target"][:14]

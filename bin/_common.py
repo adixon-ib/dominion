@@ -1,6 +1,6 @@
 """Shared display helpers for dominion/reckoning/verdict."""
 
-import re
+import xml.etree.ElementTree as ET
 from datetime import datetime
 
 B      = "\033[1m"
@@ -12,18 +12,50 @@ CYAN   = "\033[36m"
 RST    = "\033[0m"
 
 
-def parse_summary(path):
-    info = {"script": "—", "target": "—", "passed": None, "failed": None, "skipped": None}
+def parse_junit(path):
+    """Parse a pytest --junit-xml report (written to <run_dir>/junit.xml by
+    integration_tests/conftest.py). Returns the same
+    {script, target, passed, failed, skipped} shape this codebase has always
+    used for dominion/reckoning, plus a 'cases' list (status/name/duration/
+    message per <testcase>) for verdict's per-test detail view.
+
+    'script' and 'target' come from custom <property> elements
+    (record_testsuite_property("invocation", ...) / ("target", ...)) recorded
+    once per session in conftest.py — there's no single "script" once pytest
+    can run many files in one invocation, so this is the closest equivalent.
+    """
+    info = {"script": "—", "target": "—", "passed": None, "failed": None, "skipped": None, "cases": []}
     try:
-        for line in path.read_text().splitlines():
-            if line.startswith("Script:"):
-                info["script"] = line.split(":", 1)[1].strip()
-            elif line.startswith("Target:"):
-                info["target"] = line.split(":", 1)[1].strip().split("(")[0].strip()
-            elif m := re.match(r"(\d+) passed, (\d+) failed, (\d+) skipped", line):
-                info["passed"]  = int(m.group(1))
-                info["failed"]  = int(m.group(2))
-                info["skipped"] = int(m.group(3))
+        suite = ET.parse(path).getroot().find("testsuite")
+        if suite is None:
+            return info
+
+        tests    = int(suite.get("tests", 0))
+        failures = int(suite.get("failures", 0))
+        errors   = int(suite.get("errors", 0))
+        skipped  = int(suite.get("skipped", 0))
+        info["passed"]  = max(tests - failures - errors - skipped, 0)
+        info["failed"]  = failures + errors
+        info["skipped"] = skipped
+
+        props = {p.get("name"): p.get("value") for p in suite.findall("./properties/property")}
+        info["target"] = props.get("target", "—")
+        info["script"] = props.get("invocation", "pytest")
+
+        for case in suite.findall("testcase"):
+            name = f"{case.get('classname', '')}::{case.get('name', '')}"
+            duration = float(case.get("time", 0.0))
+            failure = case.find("failure")
+            error = case.find("error")
+            skip_el = case.find("skipped")
+            if failure is not None or error is not None:
+                detail = failure if failure is not None else error
+                status, message = "FAIL", (detail.text or detail.get("message", "") or "").strip()
+            elif skip_el is not None:
+                status, message = "SKIP", (skip_el.get("message") or "").strip()
+            else:
+                status, message = "PASS", ""
+            info["cases"].append({"status": status, "name": name, "duration": duration, "message": message})
     except Exception:
         pass
     return info

@@ -77,8 +77,10 @@ def pytest_collection_modifyitems(config, items):
 
 
 @pytest.fixture(scope="session", autouse=True)
-def _record_target(record_testsuite_property, request):
+def _record_run_properties(record_testsuite_property, request):
     record_testsuite_property("target", request.config.getoption("--target"))
+    invocation = " ".join(str(a) for a in request.config.invocation_params.args)
+    record_testsuite_property("invocation", invocation or "pytest")
 
 
 # -- Appliance / container fixtures (session-scoped: built once per run) ---------
