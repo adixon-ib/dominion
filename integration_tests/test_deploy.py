@@ -18,10 +18,11 @@ import os
 import time
 
 import pytest
-
 from helpers import DEFAULT_WORKTREE
 
 pytestmark = pytest.mark.destructive
+
+MD5_HEX_LEN = 32
 
 
 # -- deploy_serial_console → appliance (vm-04-89) -----------------------------
@@ -31,8 +32,10 @@ def test_deploy_serial_console_appliance(ssh_appliance):
     result = ssh_appliance.deploy_serial_console()
 
     assert result.artifact == "serial_console", f"Wrong artifact: {result.artifact}"
-    assert len(result.local_hash) == 32, f"Bad local hash: {result.local_hash}"
-    assert len(result.remote_hash) == 32, f"Bad remote hash: {result.remote_hash}"
+    assert len(result.local_hash) == MD5_HEX_LEN, f"Bad local hash: {result.local_hash}"
+    assert len(result.remote_hash) == MD5_HEX_LEN, (
+        f"Bad remote hash: {result.remote_hash}"
+    )
     assert result.local_hash == result.remote_hash, (
         f"Hash mismatch: {result.local_hash} != {result.remote_hash}"
     )
@@ -65,7 +68,8 @@ def test_deploy_token_stats_consumer_appliance(ssh_appliance):
     result = ssh_appliance.deploy_token_stats_consumer()
 
     assert result.artifact == "token_stats_consumer"
-    assert result.local_hash and len(result.local_hash) == 32
+    assert result.local_hash
+    assert len(result.local_hash) == MD5_HEX_LEN
     assert result.remote_hash == result.local_hash, (
         f"Hash mismatch: {result.local_hash} != {result.remote_hash}"
     )
@@ -74,9 +78,13 @@ def test_deploy_token_stats_consumer_appliance(ssh_appliance):
 # -- deploy_serial_console → NCC (balerion) ------------------------------------
 
 @pytest.mark.ncc
-@pytest.mark.skip(reason="host-level ops not supported on NCC OverlayFS: deploy_serial_console "
-                         "uses host_checksum/upload_to_host, which assume /infoblox/ is on the "
-                         "host filesystem; on NCC it's inside the container OverlayFS")
+@pytest.mark.skip(
+    reason=(
+        "host-level ops not supported on NCC OverlayFS: deploy_serial_console "
+        "uses host_checksum/upload_to_host, which assume /infoblox/ is on the "
+        "host filesystem; on NCC it's inside the container OverlayFS"
+    ),
+)
 def test_deploy_serial_console_ncc():
     pass
 
@@ -129,7 +137,8 @@ def test_deploy_token_stats_consumer_ncc(local_ncc_container):
     result = local_ncc_container.deploy_token_stats_consumer()
 
     assert result.artifact == "token_stats_consumer"
-    assert result.local_hash and len(result.local_hash) == 32
+    assert result.local_hash
+    assert len(result.local_hash) == MD5_HEX_LEN
     assert result.remote_hash == result.local_hash, (
         f"Hash mismatch: {result.local_hash} != {result.remote_hash}"
     )

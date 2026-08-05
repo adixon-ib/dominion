@@ -10,7 +10,6 @@ import pytest
 from nios_test import ConsoleSession, ShellSession
 from nios_test.session import BaseSession
 
-
 # -- BaseSession._clean() ---------------------------------------------------------
 
 def test_clean_strips_ansi_codes():
@@ -107,7 +106,8 @@ def test_shell_session_spawn_cmd_with_ssh_prefix_inserts_tt():
     prefix = "ssh -o StrictHostKeyChecking=no root@10.35.211.4"
     s = ShellSession(container_name="nios", transport_cmd_prefix=prefix)
     assert s._spawn_cmd == (
-        "ssh -tt -o StrictHostKeyChecking=no root@10.35.211.4 docker exec -it nios /bin/bash"
+        "ssh -tt -o StrictHostKeyChecking=no root@10.35.211.4 "
+        "docker exec -it nios /bin/bash"
     )
 
 
@@ -143,7 +143,9 @@ def test_console_session_open_handles_login_prompt(monkeypatch, fake_child_facto
     ])
     monkeypatch.setattr(session_mod.pexpect, "spawn", lambda *a, **k: child)
 
-    s = session_mod.ConsoleSession(container_name="balerion", local=True, user="admin", password="infoblox")
+    s = session_mod.ConsoleSession(
+        container_name="balerion", local=True, user="admin", password="infoblox",
+    )
     s.open()
 
     assert s._last_prompt == "Infoblox >"
@@ -151,7 +153,9 @@ def test_console_session_open_handles_login_prompt(monkeypatch, fake_child_facto
     assert ("sendline", "infoblox") in child.sent
 
 
-def test_console_session_open_handles_password_only_prompt(monkeypatch, fake_child_factory):
+def test_console_session_open_handles_password_only_prompt(
+    monkeypatch, fake_child_factory,
+):
     import nios_test.session as session_mod
     child = fake_child_factory(script=[
         (1, "", "Password: "),
@@ -159,14 +163,18 @@ def test_console_session_open_handles_password_only_prompt(monkeypatch, fake_chi
     ])
     monkeypatch.setattr(session_mod.pexpect, "spawn", lambda *a, **k: child)
 
-    s = session_mod.ConsoleSession(container_name="balerion", local=True, password="infoblox")
+    s = session_mod.ConsoleSession(
+        container_name="balerion", local=True, password="infoblox",
+    )
     s.open()
 
     assert ("sendline", "infoblox") in child.sent
     assert s._last_prompt == "Infoblox >"
 
 
-def test_console_session_open_already_at_prompt_skips_auth(monkeypatch, fake_child_factory):
+def test_console_session_open_already_at_prompt_skips_auth(
+    monkeypatch, fake_child_factory,
+):
     import nios_test.session as session_mod
     child = fake_child_factory(script=[(2, "", "Infoblox > ")])
     monkeypatch.setattr(session_mod.pexpect, "spawn", lambda *a, **k: child)

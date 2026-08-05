@@ -8,7 +8,13 @@ import subprocess
 
 import pytest
 
-from nios_test import CommandError, LocalDockerTransport, SSHDockerTransport, TransportError, connect
+from nios_test import (
+    CommandError,
+    LocalDockerTransport,
+    SSHDockerTransport,
+    TransportError,
+    connect,
+)
 
 
 class FakeCompletedProcess:
@@ -34,12 +40,15 @@ def _install_fake_run(monkeypatch, module, returncode=0, stdout="", stderr=""):
 def test_ssh_host_cmd_prefix_basic():
     t = SSHDockerTransport(host="10.35.211.4", container_name="nios")
     assert t.host_cmd_prefix == (
-        "ssh -o StrictHostKeyChecking=no -o LogLevel=ERROR -o ConnectTimeout=10 root@10.35.211.4"
+        "ssh -o StrictHostKeyChecking=no -o LogLevel=ERROR "
+        "-o ConnectTimeout=10 root@10.35.211.4"
     )
 
 
 def test_ssh_host_cmd_prefix_includes_port_and_key():
-    t = SSHDockerTransport(host="10.35.211.4", port=2222, key_path="/home/x/.ssh/id_rsa")
+    t = SSHDockerTransport(
+        host="10.35.211.4", port=2222, key_path="/home/x/.ssh/id_rsa",
+    )
     prefix = t.host_cmd_prefix
     assert "-p 2222" in prefix
     assert "-i /home/x/.ssh/id_rsa" in prefix
@@ -92,7 +101,10 @@ def test_ssh_run_check_false_returns_nonzero_without_raising(monkeypatch):
 
 def test_ssh_checksum_parses_md5sum_output(monkeypatch):
     import nios_test.transport as transport_mod
-    _install_fake_run(monkeypatch, transport_mod, stdout="deadbeef00112233445566778899aabb  /etc/hostname\n")
+    _install_fake_run(
+        monkeypatch, transport_mod,
+        stdout="deadbeef00112233445566778899aabb  /etc/hostname\n",
+    )
     t = SSHDockerTransport(host="10.35.211.4")
 
     assert t.checksum("/etc/hostname") == "deadbeef00112233445566778899aabb"
@@ -173,7 +185,9 @@ def test_local_run_on_host_uses_shlex_split(monkeypatch):
 
 def test_local_run_raises_command_error_on_nonzero_exit(monkeypatch):
     import nios_test.transport as transport_mod
-    _install_fake_run(monkeypatch, transport_mod, returncode=1, stdout=b"", stderr=b"boom")
+    _install_fake_run(
+        monkeypatch, transport_mod, returncode=1, stdout=b"", stderr=b"boom",
+    )
     t = LocalDockerTransport(container_name="balerion")
 
     with pytest.raises(CommandError):
@@ -196,7 +210,9 @@ def test_local_upload_pipes_file_bytes_via_tee(monkeypatch, tmp_path):
 
     t.upload(str(local), "/infoblox/one/lib/python/file.py")
 
-    assert captured["argv"] == ["docker", "exec", "-i", "balerion", "tee", "/infoblox/one/lib/python/file.py"]
+    assert captured["argv"] == [
+        "docker", "exec", "-i", "balerion", "tee", "/infoblox/one/lib/python/file.py",
+    ]
     assert captured["input"] == b"hello"
 
 
@@ -212,7 +228,10 @@ def test_local_host_checksum_reads_real_file(tmp_path):
 
 def test_local_checksum_parses_md5sum_output(monkeypatch):
     import nios_test.transport as transport_mod
-    _install_fake_run(monkeypatch, transport_mod, stdout=b"cafebabe00112233445566778899aabb  /etc/hostname\n")
+    _install_fake_run(
+        monkeypatch, transport_mod,
+        stdout=b"cafebabe00112233445566778899aabb  /etc/hostname\n",
+    )
     t = LocalDockerTransport(container_name="balerion")
 
     assert t.checksum("/etc/hostname") == "cafebabe00112233445566778899aabb"

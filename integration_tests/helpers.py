@@ -19,8 +19,17 @@ import time
 import traceback
 from datetime import datetime
 
-from nios_test import ApplianceConfig, BuildConfig, ContainerConfig, LocalApplianceConfig, LocalContainerConfig, LocalDockerTransport, LocalNiosContainer, ssh_reachable
-from nios_test.constants import NIOS_CONSOLE_USER, NIOS_CONSOLE_PASSWORD, WAPI_VERSION
+from nios_test import (
+    ApplianceConfig,
+    BuildConfig,
+    ContainerConfig,
+    LocalApplianceConfig,
+    LocalContainerConfig,
+    LocalDockerTransport,
+    LocalNiosContainer,
+    ssh_reachable,
+)
+from nios_test.constants import NIOS_CONSOLE_PASSWORD, NIOS_CONSOLE_USER, WAPI_VERSION
 
 DEFAULT_HOSTNAME = "vm-04-89"
 DEFAULT_IP = "10.35.211.4"
@@ -32,14 +41,18 @@ LOG_LEVEL = "info"
 NCC_DOWN_REASON = f"{DEFAULT_CONTAINER} slot is not running"
 APPLIANCE_DOWN_REASON = f"{DEFAULT_HOSTNAME} is not reachable via SSH"
 
-_RESULTS_BASE = os.environ.get("NIOS_TEST_OUTPUT_DIR", "/blox/adixon1/scripts/nios_test/results")
+_RESULTS_BASE = os.environ.get(
+    "NIOS_TEST_OUTPUT_DIR", "/blox/adixon1/scripts/nios_test/results",
+)
 
 # Computed eagerly at import time so standalone ticket-test scripts (which
 # never trigger conftest.py) still get a real per-run directory. When this
 # module is imported under pytest, conftest.py's pytest_configure()
 # overwrites this with a fresh run dir shared with the junit-xml report —
 # that reassignment always runs after this line, so it's safe either way.
-OUTPUT_DIR: str = os.path.join(_RESULTS_BASE, datetime.now().strftime("%Y-%m-%d_%H-%M-%S"))
+OUTPUT_DIR: str = os.path.join(
+    _RESULTS_BASE, datetime.now().strftime("%Y-%m-%d_%H-%M-%S"),
+)
 
 
 def resolve_ip():
@@ -144,15 +157,18 @@ def get_ncc_ip(retries=10, interval=5) -> str | None:
 # -- Legacy harness, for scripts/tickets/*/test_*.py only ----------------------
 # Not used anywhere under integration_tests/ itself — see module docstring.
 
-_PASS = 0
-_FAIL = 0
-_SKIP = 0
+class _Counters:
+    passed = 0
+    failed = 0
+    skipped = 0
+
+
+_COUNTS = _Counters()
 _RUN_SCRIPT = os.path.basename(sys.argv[0])
 _RUN_RESULTS: list[dict] = []
 
 
 def test(name, fn):
-    global _PASS, _FAIL
     print(f"\n{'=' * 60}")
     print(f"TEST: {name}")
     print(f"{'=' * 60}")
@@ -160,36 +176,44 @@ def test(name, fn):
     error = None
     try:
         fn()
-        _PASS += 1
-        print(f"  PASS")
+        _COUNTS.passed += 1
+        print("  PASS")
     except Exception:
-        _FAIL += 1
+        _COUNTS.failed += 1
         error = traceback.format_exc()
         traceback.print_exc()
-        print(f"  FAIL")
+        print("  FAIL")
     duration = time.monotonic() - start
-    _RUN_RESULTS.append({"status": "FAIL" if error else "PASS", "name": name, "duration": duration, "error": error})
+    _RUN_RESULTS.append({
+        "status": "FAIL" if error else "PASS", "name": name,
+        "duration": duration, "error": error,
+    })
 
 
 def skip(name, reason=""):
-    global _SKIP
     print(f"\n{'=' * 60}")
     print(f"SKIP: {name}{f' — {reason}' if reason else ''}")
     print(f"{'=' * 60}")
-    _SKIP += 1
-    _RUN_RESULTS.append({"status": "SKIP", "name": name, "duration": 0.0, "error": None, "reason": reason})
+    _COUNTS.skipped += 1
+    _RUN_RESULTS.append({
+        "status": "SKIP", "name": name, "duration": 0.0,
+        "error": None, "reason": reason,
+    })
 
 
 def summary(app=None):
-    total = _PASS + _FAIL + _SKIP
+    total = _COUNTS.passed + _COUNTS.failed + _COUNTS.skipped
     print(f"\n{'=' * 60}")
-    print(f"RESULTS: {_PASS} passed, {_FAIL} failed, {_SKIP} skipped out of {total}")
+    print(
+        f"RESULTS: {_COUNTS.passed} passed, {_COUNTS.failed} failed, "
+        f"{_COUNTS.skipped} skipped out of {total}"
+    )
     print(f"{'=' * 60}")
     if OUTPUT_DIR:
         print(f"Logs: {OUTPUT_DIR}/")
         _write_summary(app)
         _write_junit(app)
-    sys.exit(1 if _FAIL else 0)
+    sys.exit(1 if _COUNTS.failed else 0)
 
 
 def _write_summary(app=None):
@@ -207,16 +231,22 @@ def _write_summary(app=None):
 
     for r in _RUN_RESULTS:
         duration_str = f"({r['duration']:.1f}s)"
-        reason = f"  — {r.get('reason', '')}" if r["status"] == "SKIP" and r.get("reason") else ""
-        lines.append(f"{r['status']:<5} {r['name']:<45} {duration_str}{reason}")
+        reason = (
+            f"  — {r.get('reason', '')}"
+            if r["status"] == "SKIP" and r.get("reason") else ""
+        )
+        lines.append(
+            f"{r['status']:<5} {r['name']:<45} {duration_str}{reason}"
+        )
         if r["error"]:
             for err_line in r["error"].rstrip().splitlines():
                 lines.append(f"      {err_line}")
 
-    total = _PASS + _FAIL + _SKIP
+    total = _COUNTS.passed + _COUNTS.failed + _COUNTS.skipped
     lines += [
         "",
-        f"{_PASS} passed, {_FAIL} failed, {_SKIP} skipped out of {total}",
+        f"{_COUNTS.passed} passed, {_COUNTS.failed} failed, "
+        f"{_COUNTS.skipped} skipped out of {total}",
         f"Logs: {OUTPUT_DIR}/",
     ]
 
@@ -244,9 +274,9 @@ def _write_junit(app=None):
     testsuite = ET.SubElement(testsuites, "testsuite", {
         "name": _RUN_SCRIPT,
         "errors": "0",
-        "failures": str(_FAIL),
-        "skipped": str(_SKIP),
-        "tests": str(_PASS + _FAIL + _SKIP),
+        "failures": str(_COUNTS.failed),
+        "skipped": str(_COUNTS.skipped),
+        "tests": str(_COUNTS.passed + _COUNTS.failed + _COUNTS.skipped),
         "time": f"{total_time:.3f}",
         "timestamp": datetime.now().isoformat(),
         "hostname": socket.gethostname(),

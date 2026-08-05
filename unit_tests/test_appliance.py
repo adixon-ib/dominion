@@ -54,19 +54,25 @@ def test_config_defaults_container_name_to_nios():
 
 
 def test_config_output_dir_resolves_log_file(tmp_path):
-    cfg = ApplianceConfig(hostname=DEFAULT_HOSTNAME, ip=DEFAULT_IP, output_dir=str(tmp_path))
+    cfg = ApplianceConfig(
+        hostname=DEFAULT_HOSTNAME, ip=DEFAULT_IP, output_dir=str(tmp_path),
+    )
     assert cfg.log_file == str(tmp_path / f"{DEFAULT_HOSTNAME}.log")
 
 
 def test_local_appliance_config_output_dir_resolves_log_file(tmp_path):
-    cfg = LocalApplianceConfig(container_name=DEFAULT_CONTAINER, output_dir=str(tmp_path))
+    cfg = LocalApplianceConfig(
+        container_name=DEFAULT_CONTAINER, output_dir=str(tmp_path),
+    )
     assert cfg.log_file == str(tmp_path / f"{DEFAULT_CONTAINER}.log")
 
 
 # -- from_config wiring ------------------------------------------------------------
 
 def test_appliance_from_config_creates_ssh_transport(ssh_always_reachable):
-    cfg = ApplianceConfig(hostname=DEFAULT_HOSTNAME, ip=DEFAULT_IP, chroot=DEFAULT_CHROOT)
+    cfg = ApplianceConfig(
+        hostname=DEFAULT_HOSTNAME, ip=DEFAULT_IP, chroot=DEFAULT_CHROOT,
+    )
     appliance = Appliance.from_config(cfg)
     transport = appliance.container._transport
     assert isinstance(transport, SSHDockerTransport)
@@ -74,7 +80,9 @@ def test_appliance_from_config_creates_ssh_transport(ssh_always_reachable):
 
 
 def test_local_appliance_from_config_creates_local_transport():
-    cfg = LocalApplianceConfig(container_name=DEFAULT_CONTAINER, chroot=DEFAULT_CHROOT, ip=DEFAULT_IP)
+    cfg = LocalApplianceConfig(
+        container_name=DEFAULT_CONTAINER, chroot=DEFAULT_CHROOT, ip=DEFAULT_IP,
+    )
     appliance = LocalAppliance.from_config(cfg)
     transport = appliance.container._transport
     assert isinstance(transport, LocalDockerTransport)
@@ -90,7 +98,9 @@ def test_appliance_repr(ssh_always_reachable):
 
 
 def test_local_appliance_repr():
-    cfg = LocalApplianceConfig(container_name=DEFAULT_CONTAINER, chroot=DEFAULT_CHROOT, ip=DEFAULT_IP)
+    cfg = LocalApplianceConfig(
+        container_name=DEFAULT_CONTAINER, chroot=DEFAULT_CHROOT, ip=DEFAULT_IP,
+    )
     appliance = LocalAppliance.from_config(cfg)
     assert DEFAULT_CONTAINER in repr(appliance)
 
@@ -99,9 +109,13 @@ def test_local_appliance_ip_provided_skips_set_network(monkeypatch):
     called = {"set_network": False}
     monkeypatch.setattr(
         LocalNiosContainer, "set_network",
-        lambda self, **kw: called.__setitem__("set_network", True) or "should-not-be-used",
+        lambda self, **kw: (
+            called.__setitem__("set_network", True) or "should-not-be-used"
+        ),
     )
-    cfg = LocalApplianceConfig(container_name=DEFAULT_CONTAINER, chroot=DEFAULT_CHROOT, ip=DEFAULT_IP)
+    cfg = LocalApplianceConfig(
+        container_name=DEFAULT_CONTAINER, chroot=DEFAULT_CHROOT, ip=DEFAULT_IP,
+    )
     appliance = LocalAppliance.from_config(cfg)
 
     assert called["set_network"] is False
@@ -109,8 +123,12 @@ def test_local_appliance_ip_provided_skips_set_network(monkeypatch):
 
 
 def test_local_appliance_no_ip_triggers_set_network(monkeypatch):
-    monkeypatch.setattr(LocalNiosContainer, "set_network", lambda self, **kw: "172.20.0.5")
-    cfg = LocalApplianceConfig(container_name=DEFAULT_CONTAINER, chroot=DEFAULT_CHROOT, ip=None)
+    monkeypatch.setattr(
+        LocalNiosContainer, "set_network", lambda self, **kw: "172.20.0.5",
+    )
+    cfg = LocalApplianceConfig(
+        container_name=DEFAULT_CONTAINER, chroot=DEFAULT_CHROOT, ip=None,
+    )
     appliance = LocalAppliance.from_config(cfg)
 
     assert appliance.ip == "172.20.0.5"
@@ -148,7 +166,9 @@ def test_ensure_ssh_noop_when_already_reachable(monkeypatch):
     a = _bare_appliance()
     monkeypatch.setattr(appliance_mod, "ssh_reachable", lambda host, timeout=5: True)
     called = {"enable": False}
-    monkeypatch.setattr(a, "_enable_ssh_via_console", lambda: called.__setitem__("enable", True))
+    monkeypatch.setattr(
+        a, "_enable_ssh_via_console", lambda: called.__setitem__("enable", True),
+    )
 
     a._ensure_ssh()
 
@@ -158,7 +178,9 @@ def test_ensure_ssh_noop_when_already_reachable(monkeypatch):
 def test_ensure_ssh_enables_then_succeeds(monkeypatch):
     a = _bare_appliance()
     responses = iter([False, True])
-    monkeypatch.setattr(appliance_mod, "ssh_reachable", lambda host, timeout=5: next(responses))
+    monkeypatch.setattr(
+        appliance_mod, "ssh_reachable", lambda host, timeout=5: next(responses),
+    )
     monkeypatch.setattr(a, "_enable_ssh_via_console", lambda: None)
 
     a._ensure_ssh()  # must not raise
@@ -179,7 +201,10 @@ def _patch_console_env(monkeypatch, fake_child_factory, script):
     child = fake_child_factory(script=script)
     monkeypatch.setattr(appliance_mod.pexpect, "spawn", lambda *a, **k: child)
     monkeypatch.setattr(appliance_mod.time, "sleep", lambda s: None)
-    monkeypatch.setattr(appliance_mod.subprocess, "run", lambda *a, **k: type("R", (), {"returncode": 0})())
+    monkeypatch.setattr(
+        appliance_mod.subprocess, "run",
+        lambda *a, **k: type("R", (), {"returncode": 0})(),
+    )
     return child
 
 
@@ -207,7 +232,9 @@ def test_enable_ssh_via_console_password_only_branch(monkeypatch, fake_child_fac
     assert child.sent[0] == ("sendline", "infoblox")
 
 
-def test_enable_ssh_via_console_already_at_prompt_skips_auth(monkeypatch, fake_child_factory):
+def test_enable_ssh_via_console_already_at_prompt_skips_auth(
+    monkeypatch, fake_child_factory,
+):
     script = [(2, "", "Infoblox > ")] + [(0, "", "y or n): ") for _ in range(6)]
     child = _patch_console_env(monkeypatch, fake_child_factory, script)
 

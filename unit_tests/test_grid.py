@@ -25,12 +25,18 @@ def test_build_cmd_includes_all_optional_fields():
         ipv4_only=True, max_retries=3,
     )
     cmd = _build_cmd(cfg)
-    assert "--member" in cmd and cmd[cmd.index("--member") + 1] == "vm-02-89"
-    assert "--gm" in cmd and cmd[cmd.index("--gm") + 1] == "vm-03-89"
-    assert "--ha" in cmd and cmd[cmd.index("--ha") + 1] == "vm-04-89"
-    assert "--file" in cmd and cmd[cmd.index("--file") + 1] == "image.bin"
-    assert "--ova" in cmd and cmd[cmd.index("--ova") + 1] == "image.ova"
-    assert "--bin" in cmd and cmd[cmd.index("--bin") + 1] == "image.bin2"
+    assert "--member" in cmd
+    assert cmd[cmd.index("--member") + 1] == "vm-02-89"
+    assert "--gm" in cmd
+    assert cmd[cmd.index("--gm") + 1] == "vm-03-89"
+    assert "--ha" in cmd
+    assert cmd[cmd.index("--ha") + 1] == "vm-04-89"
+    assert "--file" in cmd
+    assert cmd[cmd.index("--file") + 1] == "image.bin"
+    assert "--ova" in cmd
+    assert cmd[cmd.index("--ova") + 1] == "image.ova"
+    assert "--bin" in cmd
+    assert cmd[cmd.index("--bin") + 1] == "image.bin2"
     assert "--ipv4-only" in cmd
     assert cmd[-2:] == ["--max-retries", "3"]
 
@@ -95,7 +101,9 @@ def test_grid_appliances_gm_only():
 
 
 def test_grid_appliances_gm_plus_members():
-    g = Grid(gm="GM_STUB", members=["M0_STUB", "M1_STUB"], topology="2member", logger=LOGGER)
+    g = Grid(
+        gm="GM_STUB", members=["M0_STUB", "M1_STUB"], topology="2member", logger=LOGGER,
+    )
     assert g.appliances == ["GM_STUB", "M0_STUB", "M1_STUB"]
 
 
@@ -113,7 +121,9 @@ def test_make_appliance_builds_correct_config(monkeypatch):
         captured["cfg"] = cfg
         return "APPLIANCE_STUB"
 
-    monkeypatch.setattr(grid_mod.Appliance, "from_config", staticmethod(fake_from_config))
+    monkeypatch.setattr(
+        grid_mod.Appliance, "from_config", staticmethod(fake_from_config),
+    )
 
     cfg = GridConfig(
         topology="standalone", chroot="/local/91/chroots/balerion",

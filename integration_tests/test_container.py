@@ -11,7 +11,6 @@ Usage:
 
 import pytest
 
-
 # -- NCC (balerion) -----------------------------------------------------------
 
 @pytest.mark.ncc

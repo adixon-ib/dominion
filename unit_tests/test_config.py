@@ -12,7 +12,6 @@ from nios_test import (
     LocalContainerConfig,
 )
 
-
 # -- ContainerConfig / LocalContainerConfig -----------------------------------
 
 def test_container_config_stores_required_fields():
@@ -24,7 +23,9 @@ def test_container_config_stores_required_fields():
 
 
 def test_container_config_output_dir_resolves_log_file(tmp_path):
-    cfg = ContainerConfig(container_name="nios", host="10.35.211.4", output_dir=str(tmp_path))
+    cfg = ContainerConfig(
+        container_name="nios", host="10.35.211.4", output_dir=str(tmp_path),
+    )
     assert cfg.log_file == str(tmp_path / "nios.log")
 
 
@@ -67,7 +68,9 @@ def test_local_appliance_config_output_dir_resolves_log_file(tmp_path):
 # -- GridConfig ----------------------------------------------------------------
 
 def test_grid_config_log_file_label_prefers_member():
-    cfg = GridConfig(topology="standalone", member="vm-02-89", gm="vm-03-89", output_dir="/tmp/x")
+    cfg = GridConfig(
+        topology="standalone", member="vm-02-89", gm="vm-03-89", output_dir="/tmp/x",
+    )
     assert cfg.log_file == "/tmp/x/grid-vm-02-89.log"
 
 
@@ -94,7 +97,9 @@ def test_build_config_chroot_defaults_from_slot():
 
 
 def test_build_config_respects_explicit_chroot():
-    cfg = BuildConfig(worktree="/blox/adixon1/my-branch", slot="balerion", chroot="/custom/chroot")
+    cfg = BuildConfig(
+        worktree="/blox/adixon1/my-branch", slot="balerion", chroot="/custom/chroot",
+    )
     assert cfg.chroot == "/custom/chroot"
 
 

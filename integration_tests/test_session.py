@@ -9,7 +9,6 @@ Usage:
 
 import pytest
 
-
 # -- SSH sessions (vm-04-89) ---------------------------------------------------
 
 @pytest.mark.appliance

@@ -13,11 +13,13 @@ from nios_test.log import (
     VerboseFormatter,
 )
 
-
 # -- resolve_log_file() ---------------------------------------------------------
 
 def test_resolve_log_file_explicit_wins():
-    assert resolve_log_file("name", log_file="/explicit/path.log", output_dir="/other") == "/explicit/path.log"
+    result = resolve_log_file(
+        "name", log_file="/explicit/path.log", output_dir="/other",
+    )
+    assert result == "/explicit/path.log"
 
 
 def test_resolve_log_file_from_output_dir(tmp_path):
@@ -38,11 +40,11 @@ def test_resolve_log_file_neither_given_returns_none():
 # -- create_logger() ------------------------------------------------------------
 
 def test_create_logger_rejects_unknown_level():
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="Unknown level"):
         create_logger(name="nios_test.unit.bad_level", level="loud")
 
 
-@pytest.mark.parametrize("level,expected_level,formatter_cls", [
+@pytest.mark.parametrize(("level", "expected_level", "formatter_cls"), [
     ("info", logging.INFO, InfoFormatter),
     ("debug", logging.DEBUG, DebugFormatter),
     ("verbose", VERBOSE, VerboseFormatter),

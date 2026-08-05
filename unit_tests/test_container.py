@@ -49,7 +49,9 @@ def test_from_config_local_creates_local_transport():
 
 
 def test_from_config_ssh_creates_ssh_transport():
-    cfg = ContainerConfig(container_name="nios", host="10.35.211.4", chroot=DEFAULT_CHROOT)
+    cfg = ContainerConfig(
+        container_name="nios", host="10.35.211.4", chroot=DEFAULT_CHROOT,
+    )
     container = NiosContainer.from_config(cfg)
     assert isinstance(container._transport, SSHDockerTransport)
     assert container._transport.host == "10.35.211.4"
@@ -78,14 +80,25 @@ def test_local_nios_container_is_nios_container():
 # -- _wait_for_wapi ---------------------------------------------------------------
 
 def test_wait_for_wapi_returns_on_first_success(fake_transport):
-    c = NiosContainer(container_name="nios", transport=fake_transport, chroot=DEFAULT_CHROOT, logger=LOGGER)
-    c._wait_for_wapi(timeout=5)  # default_response is (0, "", "") — succeeds immediately
+    c = NiosContainer(
+        container_name="nios",
+        transport=fake_transport,
+        chroot=DEFAULT_CHROOT,
+        logger=LOGGER,
+    )
+    # default_response is (0, "", "") -- succeeds immediately
+    c._wait_for_wapi(timeout=5)
     assert any(call[0] == "run" for call in fake_transport.calls)
 
 
 def test_wait_for_wapi_raises_after_timeout(monkeypatch, fake_transport_factory):
     transport = fake_transport_factory(default_response=(1, "", "connection refused"))
-    c = NiosContainer(container_name="nios", transport=transport, chroot=DEFAULT_CHROOT, logger=LOGGER)
+    c = NiosContainer(
+        container_name="nios",
+        transport=transport,
+        chroot=DEFAULT_CHROOT,
+        logger=LOGGER,
+    )
 
     import nios_test.container as container_mod
     monkeypatch.setattr(container_mod.time, "sleep", lambda s: None)
@@ -110,7 +123,12 @@ def _make_fake_clock():
 # -- restart() ----------------------------------------------------------------
 
 def test_restart_calls_docker_restart_then_waits_for_wapi(fake_transport):
-    c = NiosContainer(container_name="nios", transport=fake_transport, chroot=DEFAULT_CHROOT, logger=LOGGER)
+    c = NiosContainer(
+        container_name="nios",
+        transport=fake_transport,
+        chroot=DEFAULT_CHROOT,
+        logger=LOGGER,
+    )
     c.restart(timeout=5)
     host_cmds = [call[1] for call in fake_transport.calls if call[0] == "run_on_host"]
     assert any("docker restart nios" in cmd for cmd in host_cmds)
@@ -119,34 +137,69 @@ def test_restart_calls_docker_restart_then_waits_for_wapi(fake_transport):
 
 # -- LocalNiosContainer._get_container_network ------------------------------------
 
-def _inspect_json(ip="172.20.0.5", prefix=24, network="ncc_lan1"):
-    return json.dumps([{"NetworkSettings": {"Networks": {network: {"IPAddress": ip, "IPPrefixLen": prefix}}}}])
+DEFAULT_PREFIX_LEN = 24
+
+
+def _inspect_json(ip="172.20.0.5", prefix=DEFAULT_PREFIX_LEN, network="ncc_lan1"):
+    return json.dumps([{
+        "NetworkSettings": {
+            "Networks": {network: {"IPAddress": ip, "IPPrefixLen": prefix}},
+        },
+    }])
 
 
 def test_get_container_network_parses_ip_and_prefix(fake_transport_factory):
-    transport = fake_transport_factory(responses={"docker inspect": (0, _inspect_json(), "")})
-    c = LocalNiosContainer(container_name="balerion", transport=transport, chroot=DEFAULT_CHROOT, logger=LOGGER)
+    transport = fake_transport_factory(
+        responses={"docker inspect": (0, _inspect_json(), "")},
+    )
+    c = LocalNiosContainer(
+        container_name="balerion",
+        transport=transport,
+        chroot=DEFAULT_CHROOT,
+        logger=LOGGER,
+    )
     ip, prefix = c._get_container_network()
     assert ip == "172.20.0.5"
-    assert prefix == 24
+    assert prefix == DEFAULT_PREFIX_LEN
 
 
 def test_get_container_ip_wraps_get_container_network(fake_transport_factory):
-    transport = fake_transport_factory(responses={"docker inspect": (0, _inspect_json(ip="172.20.0.9"), "")})
-    c = LocalNiosContainer(container_name="balerion", transport=transport, chroot=DEFAULT_CHROOT, logger=LOGGER)
+    transport = fake_transport_factory(
+        responses={"docker inspect": (0, _inspect_json(ip="172.20.0.9"), "")},
+    )
+    c = LocalNiosContainer(
+        container_name="balerion",
+        transport=transport,
+        chroot=DEFAULT_CHROOT,
+        logger=LOGGER,
+    )
     assert c.get_container_ip() == "172.20.0.9"
 
 
 def test_get_container_network_raises_without_ncc_lan1(fake_transport_factory):
-    transport = fake_transport_factory(responses={"docker inspect": (0, _inspect_json(network="bridge"), "")})
-    c = LocalNiosContainer(container_name="balerion", transport=transport, chroot=DEFAULT_CHROOT, logger=LOGGER)
+    transport = fake_transport_factory(
+        responses={"docker inspect": (0, _inspect_json(network="bridge"), "")},
+    )
+    c = LocalNiosContainer(
+        container_name="balerion",
+        transport=transport,
+        chroot=DEFAULT_CHROOT,
+        logger=LOGGER,
+    )
     with pytest.raises(RuntimeError, match="ncc_lan1"):
         c._get_container_network()
 
 
 def test_get_container_network_raises_when_no_ip(fake_transport_factory):
-    transport = fake_transport_factory(responses={"docker inspect": (0, _inspect_json(ip=""), "")})
-    c = LocalNiosContainer(container_name="balerion", transport=transport, chroot=DEFAULT_CHROOT, logger=LOGGER)
+    transport = fake_transport_factory(
+        responses={"docker inspect": (0, _inspect_json(ip=""), "")},
+    )
+    c = LocalNiosContainer(
+        container_name="balerion",
+        transport=transport,
+        chroot=DEFAULT_CHROOT,
+        logger=LOGGER,
+    )
     with pytest.raises(RuntimeError, match="no IP"):
         c._get_container_network()
 
@@ -170,11 +223,18 @@ def test_find_forwarding_bridge_parses_master(fake_transport_factory):
         return 0, "", ""
 
     transport.run_on_host = fake_run_on_host
-    c = LocalNiosContainer(container_name="balerion", transport=transport, chroot=DEFAULT_CHROOT, logger=LOGGER)
+    c = LocalNiosContainer(
+        container_name="balerion",
+        transport=transport,
+        chroot=DEFAULT_CHROOT,
+        logger=LOGGER,
+    )
     assert c._find_forwarding_bridge() == "br-abc123"
 
 
-def test_find_forwarding_bridge_returns_none_when_not_forwarding(fake_transport_factory):
+def test_find_forwarding_bridge_returns_none_when_not_forwarding(
+    fake_transport_factory,
+):
     transport = fake_transport_factory(responses={"iflink": (0, "42\n", "")})
 
     def fake_run_on_host(cmd, check=True):
@@ -185,13 +245,23 @@ def test_find_forwarding_bridge_returns_none_when_not_forwarding(fake_transport_
         return 0, "", ""
 
     transport.run_on_host = fake_run_on_host
-    c = LocalNiosContainer(container_name="balerion", transport=transport, chroot=DEFAULT_CHROOT, logger=LOGGER)
+    c = LocalNiosContainer(
+        container_name="balerion",
+        transport=transport,
+        chroot=DEFAULT_CHROOT,
+        logger=LOGGER,
+    )
     assert c._find_forwarding_bridge() is None
 
 
 def test_find_forwarding_bridge_returns_none_without_indices(fake_transport_factory):
     transport = fake_transport_factory(responses={"iflink": (0, "", "")})
-    c = LocalNiosContainer(container_name="balerion", transport=transport, chroot=DEFAULT_CHROOT, logger=LOGGER)
+    c = LocalNiosContainer(
+        container_name="balerion",
+        transport=transport,
+        chroot=DEFAULT_CHROOT,
+        logger=LOGGER,
+    )
     assert c._find_forwarding_bridge() is None
 
 
@@ -212,7 +282,12 @@ class _FakeConsole:
 
 
 def test_set_network_computes_netmask_and_adds_route(monkeypatch, fake_transport):
-    c = LocalNiosContainer(container_name="balerion", transport=fake_transport, chroot=DEFAULT_CHROOT, logger=LOGGER)
+    c = LocalNiosContainer(
+        container_name="balerion",
+        transport=fake_transport,
+        chroot=DEFAULT_CHROOT,
+        logger=LOGGER,
+    )
 
     monkeypatch.setattr(c, "_get_container_network", lambda: ("172.20.0.5", 24))
     monkeypatch.setattr(c, "_find_forwarding_bridge", lambda: "br-abc123")
@@ -231,4 +306,6 @@ def test_set_network_computes_netmask_and_adds_route(monkeypatch, fake_transport
 
     assert ip == "172.20.0.5"
     host_cmds = [call[1] for call in fake_transport.calls if call[0] == "run_on_host"]
-    assert any("ip route replace 172.20.0.5/32 dev br-abc123" in cmd for cmd in host_cmds)
+    assert any(
+        "ip route replace 172.20.0.5/32 dev br-abc123" in cmd for cmd in host_cmds
+    )

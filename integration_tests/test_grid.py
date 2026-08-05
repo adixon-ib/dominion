@@ -14,10 +14,9 @@ import os
 import re
 import subprocess
 
-import pytest
-
-from helpers import DEFAULT_CHROOT, DEFAULT_WORKTREE, LOG_LEVEL, WAPI_VERSION
 import helpers
+import pytest
+from helpers import DEFAULT_CHROOT, DEFAULT_WORKTREE, LOG_LEVEL, WAPI_VERSION
 from nios_test import Appliance, Grid, GridConfig, SSHDockerTransport
 
 pytestmark = pytest.mark.destructive
@@ -72,7 +71,7 @@ def test_gm_wapi_reachable(grid):
     result = subprocess.run(
         ["curl", "-sk", "-u", "admin:infoblox",
          f"https://{grid.gm.ip}/wapi/{WAPI_VERSION}/grid"],
-        capture_output=True, text=True, timeout=30,
+        capture_output=True, text=True, timeout=30, check=False,
     )
     assert result.returncode == 0, f"WAPI unreachable at {grid.gm.ip}"
 

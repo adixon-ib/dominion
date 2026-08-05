@@ -15,7 +15,9 @@ import os
 import re
 import sys
 
-SCRIPTS_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+SCRIPTS_DIR = os.path.dirname(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+)
 if SCRIPTS_DIR not in sys.path:
     sys.path.insert(0, SCRIPTS_DIR)
 
@@ -73,7 +75,8 @@ class FakeTransport:
         self.calls.append(("run", cmd))
         m = self._MD5SUM_RE.match(cmd)
         if m and m.group(1) in self.uploaded_content:
-            return 0, f"{self._hash(self.uploaded_content[m.group(1)])}  {m.group(1)}\n", ""
+            digest = self._hash(self.uploaded_content[m.group(1)])
+            return 0, f"{digest}  {m.group(1)}\n", ""
         m = self._TAIL_MD5SUM_RE.match(cmd)
         if m and m.group(1) in self.uploaded_content:
             parts = self.uploaded_content[m.group(1)].split(b"\n", 1)

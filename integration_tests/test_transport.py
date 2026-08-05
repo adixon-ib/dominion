@@ -13,6 +13,7 @@ import tempfile
 
 import pytest
 
+MD5_HEX_LEN = 32
 
 # -- SSH transport (vm-04-89) --------------------------------------------------
 
@@ -25,7 +26,7 @@ def test_ssh_run(ssh_transport):
 
 @pytest.mark.appliance
 def test_ssh_run_on_host(ssh_transport):
-    code, out, _ = ssh_transport.run_on_host("hostname", check=False)
+    code, _out, _ = ssh_transport.run_on_host("hostname", check=False)
     assert code == 0, f"Expected exit 0, got {code}"
 
 
@@ -37,13 +38,13 @@ def test_ssh_container_running(ssh_transport):
 @pytest.mark.appliance
 def test_ssh_checksum(ssh_transport):
     md5 = ssh_transport.checksum("/etc/hostname")
-    assert len(md5) == 32, f"Bad md5 length: {len(md5)}"
+    assert len(md5) == MD5_HEX_LEN, f"Bad md5 length: {len(md5)}"
 
 
 @pytest.mark.appliance
 def test_ssh_host_checksum(ssh_transport):
     md5 = ssh_transport.host_checksum("/etc/hostname")
-    assert len(md5) == 32, f"Bad md5 length: {len(md5)}"
+    assert len(md5) == MD5_HEX_LEN, f"Bad md5 length: {len(md5)}"
 
 
 # -- Local transport (balerion) ------------------------------------------------
@@ -57,7 +58,7 @@ def test_local_run(local_transport):
 
 @pytest.mark.ncc
 def test_local_run_on_host(local_transport):
-    code, out, _ = local_transport.run_on_host("hostname", check=False)
+    code, _out, _ = local_transport.run_on_host("hostname", check=False)
     assert code == 0, f"Expected exit 0, got {code}"
 
 
@@ -69,13 +70,13 @@ def test_local_container_running(local_transport):
 @pytest.mark.ncc
 def test_local_checksum(local_transport):
     md5 = local_transport.checksum("/etc/hostname")
-    assert len(md5) == 32, f"Bad md5 length: {len(md5)}"
+    assert len(md5) == MD5_HEX_LEN, f"Bad md5 length: {len(md5)}"
 
 
 @pytest.mark.ncc
 def test_local_host_checksum(local_transport):
     md5 = local_transport.host_checksum("/etc/hostname")
-    assert len(md5) == 32, f"Bad md5 length: {len(md5)}"
+    assert len(md5) == MD5_HEX_LEN, f"Bad md5 length: {len(md5)}"
 
 
 @pytest.mark.ncc
@@ -91,7 +92,9 @@ def test_local_upload(local_transport):
         local_transport.upload(local_path, remote_path)
         code, out, _ = local_transport.run(f"cat {remote_path}", check=False)
         assert code == 0, f"cat failed: exit {code}"
-        assert marker in out, f"Content mismatch: expected {marker!r}, got {out.strip()!r}"
+        assert marker in out, (
+            f"Content mismatch: expected {marker!r}, got {out.strip()!r}"
+        )
     finally:
         os.unlink(local_path)
         local_transport.run(f"rm -f {remote_path}", check=False)

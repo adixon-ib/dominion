@@ -24,7 +24,6 @@ import re
 import subprocess
 
 import pytest
-
 from helpers import WAPI_VERSION
 from nios_test import LocalDockerTransport
 
@@ -41,14 +40,15 @@ def test_get_container_ip(local_ncc_container):
 def test_appliance_ip(local_networked_appliance):
     assert _VALID_IP.match(local_networked_appliance.ip), \
         f"Not a valid IPv4: {local_networked_appliance.ip!r}"
-    assert isinstance(local_networked_appliance.container._transport, LocalDockerTransport), \
-        "Expected LocalDockerTransport"
+    assert isinstance(
+        local_networked_appliance.container._transport, LocalDockerTransport,
+    ), "Expected LocalDockerTransport"
 
 
 def test_host_route(local_networked_appliance):
     result = subprocess.run(
         ["ip", "route", "show", f"{local_networked_appliance.ip}/32"],
-        capture_output=True, text=True,
+        capture_output=True, text=True, check=False,
     )
     assert local_networked_appliance.ip in result.stdout, \
         f"No host route found for {local_networked_appliance.ip}"
@@ -58,7 +58,7 @@ def test_wapi_from_host(local_networked_appliance):
     result = subprocess.run(
         ["curl", "-sk", "-u", "admin:infoblox",
          f"https://{local_networked_appliance.ip}/wapi/{WAPI_VERSION}/grid"],
-        capture_output=True, text=True, timeout=30,
+        capture_output=True, text=True, timeout=30, check=False,
     )
     assert result.returncode == 0, f"WAPI unreachable at {local_networked_appliance.ip}"
 
@@ -72,8 +72,10 @@ def test_shell_via_appliance(local_networked_appliance):
 def test_console_via_appliance(local_networked_appliance):
     with local_networked_appliance.console_session() as console:
         out = console.run("show network")
-        assert local_networked_appliance.ip in out, \
-            f"Expected {local_networked_appliance.ip!r} in show network output, got: {out!r}"
+        assert local_networked_appliance.ip in out, (
+            f"Expected {local_networked_appliance.ip!r} in show network output, "
+            f"got: {out!r}"
+        )
 
 
 def test_deploy_token_py_on_appliance(local_networked_appliance):

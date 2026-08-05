@@ -16,7 +16,9 @@ from datetime import datetime
 
 import pytest
 
-SCRIPTS_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+SCRIPTS_DIR = os.path.dirname(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+)
 if SCRIPTS_DIR not in sys.path:
     sys.path.insert(0, SCRIPTS_DIR)
 
@@ -34,7 +36,9 @@ from helpers import (
 )
 from nios_test import Appliance, LocalAppliance, LocalNiosContainer, NiosContainer
 
-_RESULTS_BASE = os.environ.get("NIOS_TEST_OUTPUT_DIR", "/blox/adixon1/scripts/nios_test/results")
+_RESULTS_BASE = os.environ.get(
+    "NIOS_TEST_OUTPUT_DIR", "/blox/adixon1/scripts/nios_test/results",
+)
 
 
 # -- CLI options ------------------------------------------------------------------
@@ -52,9 +56,15 @@ def pytest_addoption(parser):
 # -- Markers + timestamped run dir / junit-xml path -------------------------------
 
 def pytest_configure(config):
-    config.addinivalue_line("markers", "appliance: requires vm-04-89 reachable over SSH")
-    config.addinivalue_line("markers", "ncc: requires the balerion/drogon NCC container running")
-    config.addinivalue_line("markers", "destructive: deploys real files/binaries or reboots a target")
+    config.addinivalue_line(
+        "markers", "appliance: requires vm-04-89 reachable over SSH",
+    )
+    config.addinivalue_line(
+        "markers", "ncc: requires the balerion/drogon NCC container running",
+    )
+    config.addinivalue_line(
+        "markers", "destructive: deploys real files/binaries or reboots a target",
+    )
 
     run_id = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     run_dir = os.path.join(_RESULTS_BASE, run_id)
@@ -70,7 +80,9 @@ def pytest_collection_modifyitems(config, items):
     if target == "all":
         return
     other = "ncc" if target == "appliance" else "appliance"
-    skip_other = pytest.mark.skip(reason=f"--target={target} excludes '{other}'-marked tests")
+    skip_other = pytest.mark.skip(
+        reason=f"--target={target} excludes '{other}'-marked tests",
+    )
     for item in items:
         if other in item.keywords:
             item.add_marker(skip_other)
