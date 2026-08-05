@@ -5,7 +5,7 @@ import logging
 import pytest
 
 from nios_test import create_logger, resolve_log_file
-from nios_test.log import (
+from nios_test.src.log import (
     VERBOSE,
     VERBOSE_EX,
     DebugFormatter,

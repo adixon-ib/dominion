@@ -100,7 +100,7 @@ def test_wait_for_wapi_raises_after_timeout(monkeypatch, fake_transport_factory)
         logger=LOGGER,
     )
 
-    import nios_test.container as container_mod
+    import nios_test.src.container as container_mod
     monkeypatch.setattr(container_mod.time, "sleep", lambda s: None)
     monkeypatch.setattr(container_mod.time, "time", _make_fake_clock())
 
@@ -293,7 +293,7 @@ def test_set_network_computes_netmask_and_adds_route(monkeypatch, fake_transport
     monkeypatch.setattr(c, "_find_forwarding_bridge", lambda: "br-abc123")
     monkeypatch.setattr(c, "_wait_for_wapi", lambda timeout=None: None)
 
-    import nios_test.container as container_mod
+    import nios_test.src.container as container_mod
     monkeypatch.setattr(container_mod.time, "sleep", lambda s: None)
 
     @contextmanager

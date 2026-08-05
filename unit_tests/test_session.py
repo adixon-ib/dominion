@@ -8,7 +8,7 @@ import pexpect
 import pytest
 
 from nios_test import ConsoleSession, ShellSession
-from nios_test.session import BaseSession
+from nios_test.src.session import BaseSession
 
 # -- BaseSession._clean() ---------------------------------------------------------
 
@@ -135,7 +135,7 @@ def test_console_session_container_with_ssh_prefix_inserts_tt():
 # -- ConsoleSession.open() login branching -------------------------------------------
 
 def test_console_session_open_handles_login_prompt(monkeypatch, fake_child_factory):
-    import nios_test.session as session_mod
+    import nios_test.src.session as session_mod
     child = fake_child_factory(script=[
         (0, "", "login: "),
         (0, "", "Password: "),
@@ -156,7 +156,7 @@ def test_console_session_open_handles_login_prompt(monkeypatch, fake_child_facto
 def test_console_session_open_handles_password_only_prompt(
     monkeypatch, fake_child_factory,
 ):
-    import nios_test.session as session_mod
+    import nios_test.src.session as session_mod
     child = fake_child_factory(script=[
         (1, "", "Password: "),
         (0, "", "Infoblox > "),
@@ -175,7 +175,7 @@ def test_console_session_open_handles_password_only_prompt(
 def test_console_session_open_already_at_prompt_skips_auth(
     monkeypatch, fake_child_factory,
 ):
-    import nios_test.session as session_mod
+    import nios_test.src.session as session_mod
     child = fake_child_factory(script=[(2, "", "Infoblox > ")])
     monkeypatch.setattr(session_mod.pexpect, "spawn", lambda *a, **k: child)
 

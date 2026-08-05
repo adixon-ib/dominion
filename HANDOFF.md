@@ -17,14 +17,15 @@ Two core capabilities:
 | File | What it provides |
 |---|---|
 | `__init__.py` | Public API — see exports table below |
-| `constants.py` | NIOS timing constants + default credentials + WAPI version |
-| `config.py` | All 4 config dataclasses — `ApplianceConfig`, `LocalApplianceConfig`, `ContainerConfig`, `LocalContainerConfig` |
-| `transport.py` | Transport protocol, `SSHDockerTransport` (remote), `LocalDockerTransport` (NCC) |
-| `deploy.py` | `DeployMixin` with 4 deploy methods, `DeployResult`, `DeployError` |
-| `session.py` | `BaseSession`, `ShellSession`, `ConsoleSession` — pexpect-backed |
-| `container.py` | `NiosContainer` (remote, inherits `DeployMixin`), `LocalNiosContainer` (NCC — adds `set_network()`, `get_container_ip()`) |
-| `appliance.py` | `_ApplianceBase`, `Appliance` (SSH, auto-enables SSH on construction), `LocalAppliance` (NCC, valid IP is a construction invariant) |
-| `log.py` | `NiosLogger`, formatters, `resolve_log_file`, `create_logger`, 5 verbosity levels |
+| `src/constants.py` | NIOS timing constants + default credentials + WAPI version |
+| `src/config.py` | All 4 config dataclasses — `ApplianceConfig`, `LocalApplianceConfig`, `ContainerConfig`, `LocalContainerConfig` |
+| `src/transport.py` | Transport protocol, `SSHDockerTransport` (remote), `LocalDockerTransport` (NCC) |
+| `src/deploy.py` | `DeployMixin` with 4 deploy methods, `DeployResult`, `DeployError` |
+| `src/session.py` | `BaseSession`, `ShellSession`, `ConsoleSession` — pexpect-backed |
+| `src/container.py` | `NiosContainer` (remote, inherits `DeployMixin`), `LocalNiosContainer` (NCC — adds `set_network()`, `get_container_ip()`) |
+| `src/appliance.py` | `_ApplianceBase`, `Appliance` (SSH, auto-enables SSH on construction), `LocalAppliance` (NCC, valid IP is a construction invariant) |
+| `src/log.py` | `NiosLogger`, formatters, `resolve_log_file`, `create_logger`, 5 verbosity levels |
+| `poc/ha_poc.py` | Standalone proof-of-concept script for HA pairing two local NCC containers — not part of the library API |
 
 ### Public API (`__init__.py` exports)
 

@@ -29,7 +29,11 @@ from nios_test import (
     LocalNiosContainer,
     ssh_reachable,
 )
-from nios_test.constants import NIOS_CONSOLE_PASSWORD, NIOS_CONSOLE_USER, WAPI_VERSION
+from nios_test.src.constants import (
+    NIOS_CONSOLE_PASSWORD,
+    NIOS_CONSOLE_USER,
+    WAPI_VERSION,
+)
 
 DEFAULT_HOSTNAME = "vm-04-89"
 DEFAULT_IP = "10.35.211.4"

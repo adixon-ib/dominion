@@ -11,7 +11,7 @@ import logging
 
 import pytest
 
-import nios_test.appliance as appliance_mod
+import nios_test.src.appliance as appliance_mod
 from nios_test import (
     Appliance,
     ApplianceConfig,

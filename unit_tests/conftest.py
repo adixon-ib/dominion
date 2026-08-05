@@ -24,7 +24,7 @@ if SCRIPTS_DIR not in sys.path:
 import pytest
 
 from nios_test import CommandError
-from nios_test.deploy import (
+from nios_test.src.deploy import (
     CONSUMER_SRC,
     IBAP_FILES,
     IBAP_SUBPATH,

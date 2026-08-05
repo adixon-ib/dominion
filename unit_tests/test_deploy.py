@@ -8,7 +8,7 @@ import logging
 import pytest
 
 from nios_test import DeployError, NiosContainer
-from nios_test.deploy import CONSUMER_CONTROL, CONSUMER_DEST, CONSUMER_PIDFILE
+from nios_test.src.deploy import CONSUMER_CONTROL, CONSUMER_DEST, CONSUMER_PIDFILE
 
 LOGGER = logging.getLogger("nios_test.unit_test")
 

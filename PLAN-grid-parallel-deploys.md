@@ -17,7 +17,7 @@ Add two optional flags to `parse_flags()`:
 
 Defaults stay the same (`/tmp/my_setup`, `mygrid`), so existing callers are unaffected.
 
-### 2. `nios_test/config.py` — `GridConfig`
+### 2. `nios_test/src/config.py` — `GridConfig`
 
 Add two fields with matching defaults:
 
@@ -26,7 +26,7 @@ setup_dir: str = "/tmp/my_setup"
 tag: str = "mygrid"
 ```
 
-### 3. `nios_test/grid.py`
+### 3. `nios_test/src/grid.py`
 
 - Remove the module-level `TAG_FILE` constant.
 - In `_build_cmd`, append `["--setup-dir", config.setup_dir, "--tag", config.tag]`.

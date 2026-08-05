@@ -8,7 +8,7 @@ no integration test for this class either.
 
 import pytest
 
-import nios_test.build as build_mod
+import nios_test.src.build as build_mod
 from nios_test import BuildConfig, NiosBuild
 
 
