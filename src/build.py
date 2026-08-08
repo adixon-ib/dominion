@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
 from typing import TYPE_CHECKING
 
@@ -49,6 +50,15 @@ class NiosBuild:
         self._run("make installclean")
 
     def _run(self, make_cmds: str) -> None:
+        if not os.path.isdir(self._config.worktree):
+            raise RuntimeError(
+                f"Worktree does not exist: {self._config.worktree}"
+            )
+        if self._is_container_running():
+            raise RuntimeError(
+                f"Cannot build for slot {self._config.slot}: container is running. "
+                "Stop the container first to prevent OverlayFS corruption."
+            )
         bash = (
             f"cd {self._config.worktree} && "
             f"setbuild && "
@@ -70,6 +80,13 @@ class NiosBuild:
             raise RuntimeError(
                 f"Build failed (exit {proc.returncode}): {make_cmds}"
             )
+
+    def _is_container_running(self) -> bool:
+        proc = subprocess.run(
+            ["docker", "inspect", "-f", "{{.State.Running}}", self._config.slot],
+            capture_output=True, text=True, check=False,
+        )
+        return proc.stdout.strip().lower() == "true"
 
     def __repr__(self) -> str:
         return f"NiosBuild(slot={self._config.slot!r}, worktree={self._config.worktree!r})"

@@ -13,15 +13,52 @@ if ! command -v whiptail >/dev/null 2>&1; then
 fi
 
 get_slot_info() {
-    # $1: slot name. Prints that slot's filtered `slot status` block.
+    # $1: slot name. Prints a one-row-per-field summary for that slot,
+    # reformatted from `slot status`'s multi-column table -- the column
+    # layout there exists so both slots can be compared side by side, but
+    # conquest only ever shows one slot at a time, so there's nothing left
+    # to align columns against. Detail lines (Branch/Recent commits/Changed
+    # files/etc.) are carried through flush-left instead of nested under a
+    # now-nonexistent WORKTREE column. whiptail (newt) has no bold/color
+    # markup and doesn't render raw ANSI codes, so a "▸ " marker is used
+    # instead to set labeled rows apart from list items under them.
     slot status | awk -v slotname="$1" '
+    function trunc(s) {
+        # whiptail --menu is opened at width 100 (see below) -- long commit
+        # subjects/diff-stat lines wrap mid-word otherwise, which looks worse
+        # than a clean truncation.
+        maxw = 90
+        if (length(s) > maxw) return substr(s, 1, maxw - 1) "…"
+        return s
+    }
     {
         stripped = $0
         gsub(/\x1b\[[0-9;]*m/, "", stripped)
-        gsub(/\*/, "", stripped)
-        if (stripped ~ ("^  " slotname "([[:space:]]|$)")) { printing = 1 }
-        else if (printing && stripped ~ /^[[:space:]]*$/) { exit }
-        if (printing) print
+        if (!printing) {
+            nostar = stripped
+            gsub(/\*/, "", nostar)
+            if (nostar ~ ("^  " slotname "([[:space:]]|$)")) {
+                printing = 1
+                line = nostar
+                sub(/^ +/, "", line)
+                n = split(line, f, /  +/)
+                active = (stripped ~ ("^  \\*" slotname)) ? " (active)" : ""
+                print f[1] active
+                print trunc("▸ Container: " f[2])
+                print trunc("▸ Worktree: " f[3])
+                print trunc("▸ Chroot: " f[4])
+                build = f[5]
+                for (i = 6; i <= n; i++) build = build "  " f[i]
+                print trunc("▸ Build status: " build)
+            }
+            next
+        }
+        if (stripped ~ /^[[:space:]]*$/) { exit }
+        line = stripped
+        match(line, /^ +/)
+        indent = RLENGTH
+        sub(/^ +/, "", line)
+        print trunc(indent <= 14 ? "▸ " line : line)
     }'
 }
 

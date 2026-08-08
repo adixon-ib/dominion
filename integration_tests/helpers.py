@@ -178,8 +178,9 @@ def test(name, fn):
     print(f"{'=' * 60}")
     start = time.monotonic()
     error = None
+    result = None
     try:
-        fn()
+        result = fn()
         _COUNTS.passed += 1
         print("  PASS")
     except Exception:
@@ -192,6 +193,7 @@ def test(name, fn):
         "status": "FAIL" if error else "PASS", "name": name,
         "duration": duration, "error": error,
     })
+    return result
 
 
 def skip(name, reason=""):

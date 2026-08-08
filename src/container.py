@@ -100,8 +100,13 @@ class NiosContainer(DeployMixin):
     def _wait_for_wapi(self, timeout: int = NIOS_WAPI_READY_TIMEOUT) -> None:
         deadline = time.time() + timeout
         while time.time() < deadline:
+            # -f makes curl fail (non-zero exit) on HTTP error responses
+            # (e.g. 503 while WAPI is still starting up) — without it, a
+            # successful TCP/TLS connect with a 503 body still reports
+            # rc == 0, so this would report "ready" while WAPI still
+            # rejects real requests.
             rc, _, _ = self._transport.run(
-                f"curl -sk -u {NIOS_CONSOLE_USER}:{NIOS_CONSOLE_PASSWORD} "
+                f"curl -sk -f -u {NIOS_CONSOLE_USER}:{NIOS_CONSOLE_PASSWORD} "
                 f"https://localhost/wapi/{WAPI_VERSION}/grid",
                 check=False,
             )

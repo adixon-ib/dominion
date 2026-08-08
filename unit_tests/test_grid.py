@@ -2,6 +2,7 @@
 _make_appliance. No real grid_deploy subprocess and no real SSH probe."""
 
 import logging
+from collections import namedtuple
 
 import nios_test.src.grid as grid_mod
 from nios_test import ApplianceConfig, Grid, GridConfig
@@ -9,13 +10,30 @@ from nios_test.src.grid import _build_cmd, _make_appliance, _parse_tag_file
 
 LOGGER = logging.getLogger("nios_test.unit_test")
 
+MockAppliance = namedtuple("MockAppliance", ["hostname", "ip"])
+
 
 # -- _build_cmd() -----------------------------------------------------------------
 
 def test_build_cmd_minimal():
-    cfg = GridConfig(topology="standalone")
+    cfg = GridConfig(topology="standalone", setup_dir="/tmp/my_setup-test", tag="mygrid-test")
     cmd = _build_cmd(cfg)
-    assert cmd == [grid_mod.GRID_DEPLOY, "standalone", "--max-retries", "5"]
+    assert cmd == [
+        grid_mod.GRID_DEPLOY, "standalone", "--max-retries", "5",
+        "--setup-dir", "/tmp/my_setup-test", "--tag", "mygrid-test",
+    ]
+
+
+def test_build_cmd_auto_generates_unique_setup_dir_and_tag():
+    cfg1 = GridConfig(topology="standalone")
+    cfg2 = GridConfig(topology="standalone")
+    assert cfg1.setup_dir != cfg2.setup_dir
+    assert cfg1.tag != cfg2.tag
+    cmd = _build_cmd(cfg1)
+    assert "--setup-dir" in cmd
+    assert cmd[cmd.index("--setup-dir") + 1] == cfg1.setup_dir
+    assert "--tag" in cmd
+    assert cmd[cmd.index("--tag") + 1] == cfg1.tag
 
 
 def test_build_cmd_includes_all_optional_fields():
@@ -38,54 +56,48 @@ def test_build_cmd_includes_all_optional_fields():
     assert "--bin" in cmd
     assert cmd[cmd.index("--bin") + 1] == "image.bin2"
     assert "--ipv4-only" in cmd
-    assert cmd[-2:] == ["--max-retries", "3"]
+    assert "--max-retries" in cmd
+    assert cmd[cmd.index("--max-retries") + 1] == "3"
+    assert "--setup-dir" in cmd
+    assert cmd[cmd.index("--setup-dir") + 1] == cfg.setup_dir
+    assert "--tag" in cmd
+    assert cmd[cmd.index("--tag") + 1] == cfg.tag
 
 
 # -- _parse_tag_file() ---------------------------------------------------------------
 
+# config_grid tag files store node fields as XML attributes, not child
+# elements -- these fixtures match the real format (see grid.py's
+# _parse_tag_file docstring/comment).
 _MASTER_ONLY_XML = """<?xml version="1.0"?>
 <root>
-  <master>
-    <UNIT_1_ID>vm-03-89</UNIT_1_ID>
-    <UNIT_1_IPADDR>10.35.211.3</UNIT_1_IPADDR>
-  </master>
+  <master UNIT_1_ID="vm-03-89" UNIT_1_IPADDR="10.35.211.3" />
 </root>
 """
 
 _MASTER_PLUS_MEMBERS_XML = """<?xml version="1.0"?>
 <root>
-  <master>
-    <UNIT_1_ID>vm-03-89</UNIT_1_ID>
-    <UNIT_1_IPADDR>10.35.211.3</UNIT_1_IPADDR>
-  </master>
-  <member0>
-    <UNIT_1_ID>vm-04-89</UNIT_1_ID>
-    <UNIT_1_IPADDR>10.35.211.4</UNIT_1_IPADDR>
-  </member0>
-  <member1>
-    <UNIT_1_ID>vm-05-89</UNIT_1_ID>
-    <UNIT_1_IPADDR>10.35.211.5</UNIT_1_IPADDR>
-  </member1>
+  <master UNIT_1_ID="vm-03-89" UNIT_1_IPADDR="10.35.211.3" />
+  <member0 UNIT_1_ID="vm-04-89" UNIT_1_IPADDR="10.35.211.4" />
+  <member1 UNIT_1_ID="vm-05-89" UNIT_1_IPADDR="10.35.211.5" />
 </root>
 """
 
 
-def test_parse_tag_file_master_only(tmp_path, monkeypatch):
+def test_parse_tag_file_master_only(tmp_path):
     tag_file = tmp_path / "mygrid.xml"
     tag_file.write_text(_MASTER_ONLY_XML)
-    monkeypatch.setattr(grid_mod, "TAG_FILE", str(tag_file))
 
-    result = _parse_tag_file()
+    result = _parse_tag_file(str(tag_file))
 
     assert result == {"master": {"hostname": "vm-03-89", "ip": "10.35.211.3"}}
 
 
-def test_parse_tag_file_master_plus_members(tmp_path, monkeypatch):
+def test_parse_tag_file_master_plus_members(tmp_path):
     tag_file = tmp_path / "mygrid.xml"
     tag_file.write_text(_MASTER_PLUS_MEMBERS_XML)
-    monkeypatch.setattr(grid_mod, "TAG_FILE", str(tag_file))
 
-    result = _parse_tag_file()
+    result = _parse_tag_file(str(tag_file))
 
     assert result["master"]["hostname"] == "vm-03-89"
     assert result["member0"] == {"hostname": "vm-04-89", "ip": "10.35.211.4"}
@@ -150,3 +162,54 @@ def test_make_appliance_empty_ip_becomes_none(monkeypatch):
     cfg = GridConfig(topology="standalone")
     _make_appliance("vm-02-89", "", cfg, LOGGER)
     assert captured["cfg"].ip is None
+
+
+# -- Grid.__str__() ------------------------------------------------------------------
+
+def test_grid_str_gm_only():
+    gm = MockAppliance(hostname="vm-03-89", ip="10.35.211.3")
+    g = Grid(gm=gm, members=[], topology="standalone", logger=LOGGER)
+    assert str(g) == "standalone: vm-03-89 (10.35.211.3)"
+
+
+def test_grid_str_gm_plus_members():
+    gm = MockAppliance(hostname="vm-03-89", ip="10.35.211.3")
+    m0 = MockAppliance(hostname="vm-04-89", ip="10.35.211.4")
+    m1 = MockAppliance(hostname="vm-05-89", ip="10.35.211.5")
+    g = Grid(gm=gm, members=[m0, m1], topology="2member", logger=LOGGER)
+    assert str(g) == "2member: vm-03-89 (10.35.211.3), vm-04-89 (10.35.211.4), vm-05-89 (10.35.211.5)"
+
+
+def test_grid_str_appliance_without_ip():
+    gm = MockAppliance(hostname="vm-03-89", ip=None)
+    g = Grid(gm=gm, members=[], topology="standalone", logger=LOGGER)
+    assert str(g) == "standalone: vm-03-89"
+
+
+def test_grid_str_no_appliances():
+    g = Grid(gm=None, members=[], topology="standalone", logger=LOGGER)
+    assert str(g) == "standalone: "
+
+
+def test_grid_str_includes_setup_dir_and_tag():
+    gm = MockAppliance(hostname="vm-03-89", ip="10.35.211.3")
+    g = Grid(
+        gm=gm, members=[], topology="standalone", logger=LOGGER,
+        setup_dir="/tmp/my_setup-abc12345", tag="grid-abc12345",
+    )
+    assert str(g) == (
+        "standalone: vm-03-89 (10.35.211.3) "
+        "[setup_dir=/tmp/my_setup-abc12345, tag=grid-abc12345]"
+    )
+
+
+def test_grid_repr_includes_setup_dir_and_tag():
+    gm = MockAppliance(hostname="vm-03-89", ip="10.35.211.3")
+    g = Grid(
+        gm=gm, members=[], topology="standalone", logger=LOGGER,
+        setup_dir="/tmp/my_setup-abc12345", tag="grid-abc12345",
+    )
+    assert repr(g) == (
+        "Grid(topology='standalone', appliances=['10.35.211.3'], "
+        "setup_dir='/tmp/my_setup-abc12345', tag='grid-abc12345')"
+    )

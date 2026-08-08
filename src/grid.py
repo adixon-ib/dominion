@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import subprocess
 import xml.etree.ElementTree as ET
 from typing import TYPE_CHECKING
@@ -12,7 +13,6 @@ if TYPE_CHECKING:
     import logging
 
 GRID_DEPLOY = "/blox/adixon1/scripts/lab/grid_deploy"
-TAG_FILE = "/tmp/my_setup/mygrid.xml"
 
 
 class Grid:
@@ -23,10 +23,14 @@ class Grid:
         members: list[Appliance],
         topology: str,
         logger: logging.Logger,
+        setup_dir: str | None = None,
+        tag: str | None = None,
     ):
         self.gm = gm
         self.members = members
         self.topology = topology
+        self.setup_dir = setup_dir
+        self.tag = tag
         self._logger = logger
 
     @property
@@ -62,7 +66,8 @@ class Grid:
                 f"grid_deploy exited {proc.returncode} for topology {config.topology!r}"
             )
 
-        tag_data = _parse_tag_file()
+        tag_file = os.path.join(config.setup_dir, f"{config.tag}.xml")
+        tag_data = _parse_tag_file(tag_file)
         logger.info("Tag file parsed: %s", list(tag_data.keys()))
 
         gm_data = tag_data.get("master")
@@ -80,11 +85,29 @@ class Grid:
             members.append(appliance)
             i += 1
 
-        return cls(gm=gm, members=members, topology=config.topology, logger=logger)
+        return cls(
+            gm=gm,
+            members=members,
+            topology=config.topology,
+            logger=logger,
+            setup_dir=config.setup_dir,
+            tag=config.tag,
+        )
 
     def __repr__(self) -> str:
         hosts = [a.ip or "?" for a in self.appliances]
-        return f"Grid(topology={self.topology!r}, appliances={hosts})"
+        return (
+            f"Grid(topology={self.topology!r}, appliances={hosts}, "
+            f"setup_dir={self.setup_dir!r}, tag={self.tag!r})"
+        )
+
+    def __str__(self) -> str:
+        apps = ", ".join(
+            f"{a.hostname} ({a.ip})" if a.ip else a.hostname
+            for a in self.appliances
+        )
+        location = f" [setup_dir={self.setup_dir}, tag={self.tag}]" if self.tag else ""
+        return f"{self.topology}: {apps}{location}"
 
 
 def _build_cmd(config: GridConfig) -> list[str]:
@@ -104,20 +127,24 @@ def _build_cmd(config: GridConfig) -> list[str]:
     if config.ipv4_only:
         cmd += ["--ipv4-only"]
     cmd += ["--max-retries", str(config.max_retries)]
+    cmd += ["--setup-dir", config.setup_dir, "--tag", config.tag]
     return cmd
 
 
-def _parse_tag_file() -> dict[str, dict[str, str]]:
-    tree = ET.parse(TAG_FILE)
+def _parse_tag_file(tag_file: str) -> dict[str, dict[str, str]]:
+    tree = ET.parse(tag_file)
     root = tree.getroot()
 
     result: dict[str, dict[str, str]] = {}
 
+    # config_grid tag files store node fields as XML attributes on the
+    # <master>/<memberN> elements (e.g. <master UNIT_1_ID="vm-09-89" .../>),
+    # not as child elements.
     master = root.find("master")
     if master is not None:
         result["master"] = {
-            "hostname": master.findtext("UNIT_1_ID") or "",
-            "ip": master.findtext("UNIT_1_IPADDR") or "",
+            "hostname": master.get("UNIT_1_ID") or "",
+            "ip": master.get("UNIT_1_IPADDR") or "",
         }
 
     i = 0
@@ -126,8 +153,8 @@ def _parse_tag_file() -> dict[str, dict[str, str]]:
         if member is None:
             break
         result[f"member{i}"] = {
-            "hostname": member.findtext("UNIT_1_ID") or "",
-            "ip": member.findtext("UNIT_1_IPADDR") or "",
+            "hostname": member.get("UNIT_1_ID") or "",
+            "ip": member.get("UNIT_1_IPADDR") or "",
         }
         i += 1
 

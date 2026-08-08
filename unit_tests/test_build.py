@@ -6,6 +6,9 @@ module docstring in build.py): builds are destructive and slow, so there is
 no integration test for this class either.
 """
 
+import os
+from unittest.mock import Mock
+
 import pytest
 
 import nios_test.src.build as build_mod
@@ -32,41 +35,105 @@ def _install_fake_popen(monkeypatch, returncode=0):
     return captured
 
 
-def _build():
-    cfg = BuildConfig(worktree="/blox/adixon1/my-branch", slot="balerion")
+def _install_container_not_running(monkeypatch):
+    original_run = build_mod.subprocess.run
+
+    def fake_run(cmd, *args, **kwargs):
+        if cmd and "docker" in cmd[0]:
+            return Mock(returncode=0, stdout="false\n", stderr="")
+        return original_run(cmd, *args, **kwargs)
+
+    monkeypatch.setattr(build_mod.subprocess, "run", fake_run)
+
+
+@pytest.fixture
+def worktree(tmp_path):
+    wt = tmp_path / "my-branch"
+    wt.mkdir()
+    return str(wt)
+
+
+def _build(worktree_path=None):
+    cfg = BuildConfig(
+        worktree=worktree_path or "/blox/adixon1/my-branch",
+        slot="balerion",
+    )
     return NiosBuild.from_config(cfg)
 
 
-def test_quick_runs_touch_skip_slow_and_make_install(monkeypatch):
+def test_quick_runs_touch_skip_slow_and_make_install(monkeypatch, worktree):
+    _install_container_not_running(monkeypatch)
     captured = _install_fake_popen(monkeypatch)
-    _build().quick()
+    _build(worktree).quick()
     bash = captured["argv"][-1]
     assert "touch skip_slow && make install" in bash
 
 
-def test_full_runs_installclean_build_env_install(monkeypatch):
+def test_full_runs_installclean_build_env_install(monkeypatch, worktree):
+    _install_container_not_running(monkeypatch)
     captured = _install_fake_popen(monkeypatch)
-    _build().full()
+    _build(worktree).full()
     bash = captured["argv"][-1]
     assert "make installclean && make build-env && make install" in bash
 
 
-def test_clean_runs_installclean_only(monkeypatch):
+def test_clean_runs_installclean_only(monkeypatch, worktree):
+    _install_container_not_running(monkeypatch)
     captured = _install_fake_popen(monkeypatch)
-    _build().clean()
+    _build(worktree).clean()
     bash = captured["argv"][-1]
     assert bash.rstrip().endswith("make installclean")
 
 
-def test_bash_command_includes_worktree_and_chroot(monkeypatch):
+def test_bash_command_includes_worktree_and_chroot(monkeypatch, worktree):
+    _install_container_not_running(monkeypatch)
     captured = _install_fake_popen(monkeypatch)
-    _build().quick()
+    _build(worktree).quick()
     bash = captured["argv"][-1]
-    assert "cd /blox/adixon1/my-branch &&" in bash
+    assert f"cd {worktree} &&" in bash
     assert "export ASLAN_INSTALL_ROOT=/local/91/chroots/balerion" in bash
 
 
-def test_nonzero_returncode_raises_runtime_error(monkeypatch):
+def test_nonzero_returncode_raises_runtime_error(monkeypatch, worktree):
+    _install_container_not_running(monkeypatch)
     _install_fake_popen(monkeypatch, returncode=1)
     with pytest.raises(RuntimeError):
-        _build().quick()
+        _build(worktree).quick()
+
+
+# -- Safety check tests -------------------------------------------------------
+
+
+def test_run_rejects_nonexistent_worktree(monkeypatch):
+    _install_container_not_running(monkeypatch)
+    _install_fake_popen(monkeypatch)
+    with pytest.raises(RuntimeError, match="Worktree does not exist"):
+        _build("/nonexistent/path").quick()
+
+
+def test_run_rejects_container_running(monkeypatch, worktree):
+    monkeypatch.setattr(
+        build_mod.subprocess, "run",
+        lambda cmd, **kw: Mock(returncode=0, stdout="true\n", stderr=""),
+    )
+    _install_fake_popen(monkeypatch)
+    with pytest.raises(RuntimeError, match="container is running"):
+        _build(worktree).quick()
+
+
+def test_is_container_running_false(monkeypatch, worktree):
+    monkeypatch.setattr(
+        build_mod.subprocess, "run",
+        lambda cmd, **kw: Mock(returncode=0, stdout="false\n", stderr=""),
+    )
+    build = _build(worktree)
+    assert build._is_container_running() is False
+
+
+def test_is_container_running_true(monkeypatch, worktree):
+    monkeypatch.setattr(
+        build_mod.subprocess, "run",
+        lambda cmd, **kw: Mock(returncode=0, stdout="true\n", stderr=""),
+    )
+    build = _build(worktree)
+    assert build._is_container_running() is True

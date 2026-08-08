@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import uuid
 from dataclasses import dataclass, field
 
 from .constants import NIOS_CONSOLE_USER, NIOS_CONSOLE_PASSWORD
@@ -106,6 +107,8 @@ class GridConfig:
     bin: str | None = None
     ipv4_only: bool = False
     max_retries: int = 5
+    setup_dir: str = "/tmp/my_setup"
+    tag: str = "mygrid"
     chroot: str = "/local/91/aslan_chroot"
     worktree: str | None = None
     log_level: str = "info"
@@ -114,6 +117,10 @@ class GridConfig:
     logger: logging.Logger | None = field(default=None, repr=False)
 
     def __post_init__(self):
+        if self.setup_dir == "/tmp/my_setup" and self.tag == "mygrid":
+            uid = uuid.uuid4().hex[:8]
+            self.tag = f"grid-{uid}"
+            self.setup_dir = f"/tmp/my_setup-{uid}"
         if not self.log_file and self.output_dir:
             label = self.member or self.gm or self.topology
             self.log_file = resolve_log_file(

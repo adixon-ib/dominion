@@ -26,6 +26,18 @@ class DeployResult:
     restarted: bool = False
     details: dict = field(default_factory=dict)
 
+    def __str__(self) -> str:
+        parts = [self.artifact, "changed" if self.changed else "unchanged"]
+        if self.restarted:
+            parts.append("restarted")
+        files = self.details.get("files")
+        if files:
+            parts.append(f"{len(files)} file(s) deployed")
+        skipped = self.details.get("skipped")
+        if skipped:
+            parts.append(f"{len(skipped)} skipped")
+        return f"DeployResult({', '.join(parts)})"
+
 
 PYABS_FILES = [
     "grid_token_pool.py",
@@ -266,9 +278,23 @@ class DeployMixin:
         if not manifest:
             raise DeployError("No files in manifest", artifact="token_py")
 
-        for local_path, _ in manifest:
-            if not os.path.isfile(local_path):
-                raise DeployError(f"Local file not found: {local_path}", artifact="token_py")
+        # Skip (rather than fail) files absent from this worktree — some
+        # branches predate newer files in the manifest (e.g. a feature added
+        # after this branch was cut). Missing files are logged, not fatal.
+        found = []
+        skipped = []
+        for local_path, dest in manifest:
+            if os.path.isfile(local_path):
+                found.append((local_path, dest))
+            else:
+                skipped.append(local_path)
+                log.warning("Skipping missing file: %s", local_path)
+        manifest = found
+
+        if not manifest:
+            raise DeployError(
+                "No files in manifest were found on disk", artifact="token_py"
+            )
 
         file_results = []
         for local_path, dest in manifest:
@@ -290,14 +316,28 @@ class DeployMixin:
                 "/infoblox/one/bin/pmc command stop admin-httpd 2>/dev/null || true",
                 check=False,
             )
+            # Don't rely on process_manager to auto-respawn admin-httpd —
+            # after repeated stop/start cycles in a short window (e.g.
+            # iterating on a hot-deploy loop), it can hit a crash-loop
+            # backoff and stop auto-respawning entirely, leaving admin-httpd
+            # down until something explicitly starts it again.
+            time.sleep(2)
+            self._transport.run(
+                "/infoblox/one/bin/pmc command start admin-httpd 2>/dev/null || true",
+                check=False,
+            )
             restarted = True
-            log.info("admin-httpd stopped — process_manager will respawn (~15s)")
+            log.info("admin-httpd restarted")
 
         return DeployResult(
             artifact="token_py",
             changed=True,
             restarted=restarted,
-            details={"files": file_results, "groups": sorted(groups)},
+            details={
+                "files": file_results,
+                "groups": sorted(groups),
+                "skipped": skipped,
+            },
         )
 
     # -- deploy: token_stats_consumer --------------------------------------
