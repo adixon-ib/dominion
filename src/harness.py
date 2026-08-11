@@ -1,9 +1,9 @@
-"""test()/skip()/summary() run harness for standalone nios_test scripts.
+"""Run: a test-step/reporting harness for standalone nios_test scripts.
 
 For any script that drives itself directly via `python3 script.py` (ticket
 tests under scripts/tickets/*/test_*.py, one-off repro scripts, etc.) rather
 than through the integration_tests/ pytest suite. Exported from the
-top-level nios_test package. Use `from nios_test import test, skip, summary`.
+top-level nios_test package. Use `from nios_test import Run`.
 
 Do not use this module from anything under integration_tests/ itself.
 pytest already has its own reporting (--junit-xml), and
@@ -12,23 +12,18 @@ own argv (file paths, -m expressions), not an appliance IP.
 """
 
 import os
+import socket
 import sys
 import time
 import traceback
+import xml.etree.ElementTree as ET
 from datetime import datetime
 
 from .config import Defaults
 
 _defaults = Defaults.from_json()
 DEFAULT_IP = _defaults.ip
-
-_RESULTS_BASE = os.environ.get(
-    "NIOS_TEST_OUTPUT_DIR",
-    _defaults.output_dir or "/blox/adixon1/scripts/nios_test/results",
-)
-OUTPUT_DIR: str = os.path.join(
-    _RESULTS_BASE, datetime.now().strftime("%Y-%m-%d_%H-%M-%S"),
-)
+DEFAULT_RESULTS_DIR = "/blox/adixon1/scripts/nios_test/results"
 
 
 def resolve_ip_from_argv():
@@ -44,197 +39,210 @@ def resolve_ip_from_argv():
     return os.environ.get("NIOS_IP", DEFAULT_IP)
 
 
-class _Counters:
-    passed = 0
-    failed = 0
-    skipped = 0
+class Run:
+    """One script's test run: tracks pass/fail/skip counts and writes
+    summary.txt/junit.xml under its own output directory.
 
-
-_COUNTS = _Counters()
-_RUN_SCRIPT = os.path.basename(sys.argv[0])
-_RUN_RESULTS: list[dict] = []
-
-
-def test(name, fn):
-    """Run fn as one named test step, recording pass/fail for the summary.
+    Unlike the old module-level test()/skip()/summary() functions, a Run's
+    state (counts, output directory) lives on the instance, not on the
+    nios_test module. There's nothing to race against import order: the
+    output directory is resolved the moment you construct the Run, from
+    whichever argument/env var/config value you pass in, not as a side
+    effect of importing nios_test.
 
     Args:
-        fn: Zero-argument callable. Any exception it raises is caught and
-            recorded as a failure rather than propagated.
-
-    Returns:
-        fn's return value, or None if fn raised.
+        output_dir: Base directory this run's output goes under (a
+            timestamped subdirectory is created inside it). Falls back to
+            the NIOS_TEST_OUTPUT_DIR env var, then config.json's
+            output_dir, then DEFAULT_RESULTS_DIR.
+        script: Name recorded in reports. Defaults to the invoking script's
+            basename (sys.argv[0]).
     """
-    print(f"\n{'=' * 60}")
-    print(f"TEST: {name}")
-    print(f"{'=' * 60}")
-    start = time.monotonic()
-    error = None
-    result = None
-    try:
-        result = fn()
-        _COUNTS.passed += 1
-        print("  PASS")
-    except Exception:
-        _COUNTS.failed += 1
-        error = traceback.format_exc()
-        traceback.print_exc()
-        print("  FAIL")
-    duration = time.monotonic() - start
-    _RUN_RESULTS.append({
-        "status": "FAIL" if error else "PASS", "name": name,
-        "duration": duration, "error": error,
-    })
-    return result
 
-
-def skip(name, reason=""):
-    """Record a named test step as skipped, without running it.
-
-    Args:
-        reason: Optional explanation, printed and included in the summary.
-    """
-    print(f"\n{'=' * 60}")
-    print(f"SKIP: {name}{f' — {reason}' if reason else ''}")
-    print(f"{'=' * 60}")
-    _COUNTS.skipped += 1
-    _RUN_RESULTS.append({
-        "status": "SKIP", "name": name, "duration": 0.0,
-        "error": None, "reason": reason,
-    })
-
-
-def summary(app):
-    """Print totals, write summary.txt and junit.xml, then exit the process.
-
-    Terminates the script with sys.exit(): 1 if any test failed, else 0.
-
-    Args:
-        app: The appliance/container object the run tested against. Used to
-            label the report target via str(app).
-
-    Raises:
-        TypeError: If app is None.
-    """
-    if app is None:
-        raise TypeError(
-            "summary() requires the appliance/container object the run "
-            "tested against, to label the report target correctly"
+    def __init__(self, output_dir: str | None = None, script: str | None = None):
+        base = output_dir or os.environ.get(
+            "NIOS_TEST_OUTPUT_DIR", _defaults.output_dir or DEFAULT_RESULTS_DIR,
         )
-    total = _COUNTS.passed + _COUNTS.failed + _COUNTS.skipped
-    print(f"\n{'=' * 60}")
-    print(
-        f"RESULTS: {_COUNTS.passed} passed, {_COUNTS.failed} failed, "
-        f"{_COUNTS.skipped} skipped out of {total}"
-    )
-    print(f"{'=' * 60}")
-    if OUTPUT_DIR:
-        _write_junit(app)
-        files = sorted(os.listdir(OUTPUT_DIR)) if os.path.isdir(OUTPUT_DIR) else []
-        if "summary.txt" not in files:
-            files.append("summary.txt")
-            files.sort()
-        _write_summary(app, files)
-        print(f"Logs: {OUTPUT_DIR}/")
-        for name in files:
-            print(f"  {name}")
-    sys.exit(1 if _COUNTS.failed else 0)
+        self.output_dir = os.path.join(base, datetime.now().strftime("%Y-%m-%d_%H-%M-%S"))
+        self.script = script or os.path.basename(sys.argv[0])
+        self._passed = 0
+        self._failed = 0
+        self._skipped = 0
+        self._results: list[dict] = []
 
+    def test(self, name, fn):
+        """Run fn as one named test step, recording pass/fail for the summary.
 
-def _target(app) -> str:
-    """Label for app in reports. Each app type formats itself via __str__."""
-    return str(app)
+        Args:
+            fn: Zero-argument callable. Any exception it raises is caught
+                and recorded as a failure rather than propagated.
 
-
-def _write_summary(app, files):
-    """Write OUTPUT_DIR/summary.txt with the run's target, steps, and totals.
-
-    Args:
-        files: Full listing of OUTPUT_DIR, including summary.txt's own name
-            and any log files written during the run, so the file's final
-            block matches what summary() prints to the console.
-    """
-    run_id = os.path.basename(OUTPUT_DIR)
-    target = _target(app)
-    lines = [
-        f"Run:    {run_id}",
-        f"Script: {_RUN_SCRIPT}",
-        f"Target: {target}",
-        "",
-    ]
-
-    for r in _RUN_RESULTS:
-        duration_str = f"({r['duration']:.1f}s)"
-        reason = (
-            f"  — {r.get('reason', '')}"
-            if r["status"] == "SKIP" and r.get("reason") else ""
-        )
-        lines.append(
-            f"{r['status']:<5} {r['name']:<45} {duration_str}{reason}"
-        )
-        if r["error"]:
-            for err_line in r["error"].rstrip().splitlines():
-                lines.append(f"      {err_line}")
-
-    total = _COUNTS.passed + _COUNTS.failed + _COUNTS.skipped
-    lines += [
-        "",
-        f"{_COUNTS.passed} passed, {_COUNTS.failed} failed, "
-        f"{_COUNTS.skipped} skipped out of {total}",
-        f"Logs: {OUTPUT_DIR}/",
-        *[f"  {name}" for name in files],
-    ]
-
-    summary_path = os.path.join(OUTPUT_DIR, "summary.txt")
-    os.makedirs(OUTPUT_DIR, exist_ok=True)
-    with open(summary_path, "w") as f:
-        f.write("\n".join(lines) + "\n")
-
-
-def _write_junit(app):
-    """Write OUTPUT_DIR/junit.xml in the same shape pytest's own --junit-xml
-    produces, so dominion/reckoning/verdict (which only read junit.xml, not
-    summary.txt) pick up ticket-test runs too.
-
-    Args:
-        app: The appliance/container object the run tested against. Used to
-            label the report target via str(app).
-    """
-    import socket
-    import xml.etree.ElementTree as ET
-
-    target = _target(app)
-
-    total_time = sum(r["duration"] for r in _RUN_RESULTS)
-    testsuites = ET.Element("testsuites", {"name": "nios_test ticket tests"})
-    testsuite = ET.SubElement(testsuites, "testsuite", {
-        "name": _RUN_SCRIPT,
-        "errors": "0",
-        "failures": str(_COUNTS.failed),
-        "skipped": str(_COUNTS.skipped),
-        "tests": str(_COUNTS.passed + _COUNTS.failed + _COUNTS.skipped),
-        "time": f"{total_time:.3f}",
-        "timestamp": datetime.now().isoformat(),
-        "hostname": socket.gethostname(),
-    })
-
-    properties = ET.SubElement(testsuite, "properties")
-    ET.SubElement(properties, "property", {"name": "target", "value": target})
-    ET.SubElement(properties, "property", {"name": "invocation", "value": _RUN_SCRIPT})
-
-    classname = os.path.splitext(_RUN_SCRIPT)[0]
-    for r in _RUN_RESULTS:
-        case = ET.SubElement(testsuite, "testcase", {
-            "classname": classname,
-            "name": r["name"],
-            "time": f"{r['duration']:.3f}",
+        Returns:
+            fn's return value, or None if fn raised.
+        """
+        print(f"\n{'=' * 60}")
+        print(f"TEST: {name}")
+        print(f"{'=' * 60}")
+        start = time.monotonic()
+        error = None
+        result = None
+        try:
+            result = fn()
+            self._passed += 1
+            print("  PASS")
+        except Exception:
+            self._failed += 1
+            error = traceback.format_exc()
+            traceback.print_exc()
+            print("  FAIL")
+        duration = time.monotonic() - start
+        self._results.append({
+            "status": "FAIL" if error else "PASS", "name": name,
+            "duration": duration, "error": error,
         })
-        if r["status"] == "FAIL":
-            failure = ET.SubElement(case, "failure", {"message": "test failed"})
-            failure.text = r["error"] or ""
-        elif r["status"] == "SKIP":
-            ET.SubElement(case, "skipped", {"message": r.get("reason", "")})
+        return result
 
-    junit_path = os.path.join(OUTPUT_DIR, "junit.xml")
-    os.makedirs(OUTPUT_DIR, exist_ok=True)
-    ET.ElementTree(testsuites).write(junit_path, encoding="utf-8", xml_declaration=True)
+    def skip(self, name, reason=""):
+        """Record a named test step as skipped, without running it.
+
+        Args:
+            reason: Optional explanation, printed and included in the summary.
+        """
+        print(f"\n{'=' * 60}")
+        print(f"SKIP: {name}{f' — {reason}' if reason else ''}")
+        print(f"{'=' * 60}")
+        self._skipped += 1
+        self._results.append({
+            "status": "SKIP", "name": name, "duration": 0.0,
+            "error": None, "reason": reason,
+        })
+
+    def summary(self, app):
+        """Print totals, write summary.txt and junit.xml, then exit the process.
+
+        Terminates the script with sys.exit(): 1 if any test failed, else 0.
+
+        Args:
+            app: The appliance/container object the run tested against.
+                Used to label the report target via str(app).
+
+        Raises:
+            TypeError: If app is None.
+        """
+        if app is None:
+            raise TypeError(
+                "summary() requires the appliance/container object the run "
+                "tested against, to label the report target correctly"
+            )
+        total = self._passed + self._failed + self._skipped
+        print(f"\n{'=' * 60}")
+        print(
+            f"RESULTS: {self._passed} passed, {self._failed} failed, "
+            f"{self._skipped} skipped out of {total}"
+        )
+        print(f"{'=' * 60}")
+        if self.output_dir:
+            self._write_junit(app)
+            files = sorted(os.listdir(self.output_dir)) if os.path.isdir(self.output_dir) else []
+            if "summary.txt" not in files:
+                files.append("summary.txt")
+                files.sort()
+            self._write_summary(app, files)
+            print(f"Logs: {self.output_dir}/")
+            for name in files:
+                print(f"  {name}")
+        sys.exit(1 if self._failed else 0)
+
+    def _target(self, app) -> str:
+        """Label for app in reports. Each app type formats itself via __str__."""
+        return str(app)
+
+    def _write_summary(self, app, files):
+        """Write output_dir/summary.txt with the run's target, steps, and totals.
+
+        Args:
+            files: Full listing of output_dir, including summary.txt's own
+                name and any log files written during the run, so the
+                file's final block matches what summary() prints to the
+                console.
+        """
+        run_id = os.path.basename(self.output_dir)
+        target = self._target(app)
+        lines = [
+            f"Run:    {run_id}",
+            f"Script: {self.script}",
+            f"Target: {target}",
+            "",
+        ]
+
+        for r in self._results:
+            duration_str = f"({r['duration']:.1f}s)"
+            reason = (
+                f"  — {r.get('reason', '')}"
+                if r["status"] == "SKIP" and r.get("reason") else ""
+            )
+            lines.append(
+                f"{r['status']:<5} {r['name']:<45} {duration_str}{reason}"
+            )
+            if r["error"]:
+                for err_line in r["error"].rstrip().splitlines():
+                    lines.append(f"      {err_line}")
+
+        total = self._passed + self._failed + self._skipped
+        lines += [
+            "",
+            f"{self._passed} passed, {self._failed} failed, "
+            f"{self._skipped} skipped out of {total}",
+            f"Logs: {self.output_dir}/",
+            *[f"  {name}" for name in files],
+        ]
+
+        summary_path = os.path.join(self.output_dir, "summary.txt")
+        os.makedirs(self.output_dir, exist_ok=True)
+        with open(summary_path, "w") as f:
+            f.write("\n".join(lines) + "\n")
+
+    def _write_junit(self, app):
+        """Write output_dir/junit.xml in the same shape pytest's own
+        --junit-xml produces, so dominion/reckoning/verdict (which only
+        read junit.xml, not summary.txt) pick up ticket-test runs too.
+
+        Args:
+            app: The appliance/container object the run tested against.
+                Used to label the report target via str(app).
+        """
+        target = self._target(app)
+
+        total_time = sum(r["duration"] for r in self._results)
+        testsuites = ET.Element("testsuites", {"name": "nios_test ticket tests"})
+        testsuite = ET.SubElement(testsuites, "testsuite", {
+            "name": self.script,
+            "errors": "0",
+            "failures": str(self._failed),
+            "skipped": str(self._skipped),
+            "tests": str(self._passed + self._failed + self._skipped),
+            "time": f"{total_time:.3f}",
+            "timestamp": datetime.now().isoformat(),
+            "hostname": socket.gethostname(),
+        })
+
+        properties = ET.SubElement(testsuite, "properties")
+        ET.SubElement(properties, "property", {"name": "target", "value": target})
+        ET.SubElement(properties, "property", {"name": "invocation", "value": self.script})
+
+        classname = os.path.splitext(self.script)[0]
+        for r in self._results:
+            case = ET.SubElement(testsuite, "testcase", {
+                "classname": classname,
+                "name": r["name"],
+                "time": f"{r['duration']:.3f}",
+            })
+            if r["status"] == "FAIL":
+                failure = ET.SubElement(case, "failure", {"message": "test failed"})
+                failure.text = r["error"] or ""
+            elif r["status"] == "SKIP":
+                ET.SubElement(case, "skipped", {"message": r.get("reason", "")})
+
+        junit_path = os.path.join(self.output_dir, "junit.xml")
+        os.makedirs(self.output_dir, exist_ok=True)
+        ET.ElementTree(testsuites).write(junit_path, encoding="utf-8", xml_declaration=True)
