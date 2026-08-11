@@ -135,6 +135,43 @@ def test_restart_calls_docker_restart_then_waits_for_wapi(fake_transport):
     assert any(call[0] == "run" for call in fake_transport.calls)  # the WAPI poll
 
 
+# -- NiosContainer.console_session --------------------------------------------
+
+def test_console_session_builds_ssh_spawn_cmd_from_transport(monkeypatch):
+    transport = SSHDockerTransport(host="vm-04-89", container_name="nios")
+    c = NiosContainer(
+        container_name="nios",
+        transport=transport,
+        chroot=DEFAULT_CHROOT,
+        logger=LOGGER,
+    )
+
+    captured = {}
+
+    class FakeConsoleSession:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+        def _open(self):
+            pass
+
+        def _close(self):
+            pass
+
+    import nios_test.src.container as container_mod
+    monkeypatch.setattr(container_mod, "ConsoleSession", FakeConsoleSession)
+
+    with c.console_session():
+        pass
+
+    assert captured["spawn_cmd"] == (
+        "ssh -o StrictHostKeyChecking=no -o LogLevel=ERROR -o ConnectTimeout=10 "
+        "-p 22 admin@vm-04-89"
+    )
+    assert captured["user"] == "admin"
+    assert captured["password"] == "infoblox"
+
+
 # -- LocalNiosContainer._get_container_network ------------------------------------
 
 DEFAULT_PREFIX_LEN = 24

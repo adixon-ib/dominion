@@ -69,33 +69,36 @@ class NiosContainer(DeployMixin):
 
     @contextmanager
     def shell_session(self, logger=None, timeout=30):
+        spawn_cmd = self._transport.build_exec_cmd(
+            f"docker exec -it {self.container_name} /bin/bash", tty=True,
+        )
         session = ShellSession(
-            container_name=self.container_name,
-            transport_cmd_prefix=self._transport.host_cmd_prefix,
+            spawn_cmd=spawn_cmd,
             logger=logger or self._logger,
             timeout=timeout,
         )
         try:
-            session.open()
+            session._open()
             yield session
         finally:
-            session.close()
+            session._close()
 
     @contextmanager
     def console_session(self, logger=None, timeout=60):
+        ssh_opts = " ".join(self._transport.SSH_OPTS)
+        spawn_cmd = f"ssh {ssh_opts} -p 22 {self._console_user}@{self._transport.host}"
         session = ConsoleSession(
-            host=self._transport.host,
-            port=22,
+            spawn_cmd=spawn_cmd,
             user=self._console_user,
             password=self._console_password,
             logger=logger or self._logger,
             timeout=timeout,
         )
         try:
-            session.open()
+            session._open()
             yield session
         finally:
-            session.close()
+            session._close()
 
     def _wait_for_wapi(self, timeout: int = NIOS_WAPI_READY_TIMEOUT) -> None:
         deadline = time.time() + timeout
@@ -149,19 +152,22 @@ class LocalNiosContainer(NiosContainer):
 
     @contextmanager
     def console_session(self, logger=None, timeout=60):
+        spawn_cmd = self._transport.build_exec_cmd(
+            f"docker exec -it {self.container_name} /infoblox/one/bin/serial_console",
+            tty=True,
+        )
         session = ConsoleSession(
-            container_name=self.container_name,
-            local=True,
+            spawn_cmd=spawn_cmd,
             user=self._console_user,
             password=self._console_password,
             logger=logger or self._logger,
             timeout=timeout,
         )
         try:
-            session.open()
+            session._open()
             yield session
         finally:
-            session.close()
+            session._close()
 
     def _get_container_network(self) -> tuple[str, int]:
         _, out, _ = self._transport.run_on_host(
