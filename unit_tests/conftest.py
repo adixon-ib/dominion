@@ -38,9 +38,6 @@ from nios_test.src.deploy import (
 class FakeTransport:
     """Duck-typed stand-in for SSHDockerTransport/LocalDockerTransport."""
 
-    is_local = True
-    host_cmd_prefix = ""
-
     _MD5SUM_RE = re.compile(r"^md5sum\s+(\S+)")
     _TAIL_MD5SUM_RE = re.compile(r"^tail -n \+2\s+(\S+)\s*\|\s*md5sum")
     _CP_RE = re.compile(r"\bcp\s+(\S+)\s+(\S+)")
