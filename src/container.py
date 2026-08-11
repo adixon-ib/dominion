@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-import json
 import logging
-import re
 import time
 from contextlib import contextmanager
 
@@ -17,6 +15,7 @@ from .constants import (
 )
 from .deploy import DeployMixin
 from .log import create_logger
+from .network import LocalNetworkMixin
 from .session import ShellSession, ConsoleSession
 from .transport import LocalDockerTransport, SSHDockerTransport
 
@@ -126,11 +125,62 @@ class NiosContainer(DeployMixin):
         self._wait_for_wapi(timeout=timeout)
         self._logger.info("%s is back up", self.container_name)
 
+    def set_network(
+        self, ip: str, netmask: str, gateway: str, reboot_timeout: int = NIOS_REBOOT_TIMEOUT,
+    ) -> str:
+        """Run the console "set network" wizard with explicit IP/netmask/gateway,
+        then wait out the reboot. Callers already know these values (e.g. from
+        Appliance/config) and are responsible for confirming NIOS is back up —
+        this does not poll WAPI. LocalNiosContainer overrides this to
+        auto-discover the values when omitted and additionally poll WAPI +
+        add a host route, via super().set_network(...).
+        """
+        self._logger.info(
+            "Configuring NIOS network: IP=%s netmask=%s gateway=%s",
+            ip, netmask, gateway,
+        )
+
+        with self.console_session() as console:
+            console.sendline("set network")
+            console.expect("Enter IPv4 address")
+            console.sendline(ip)
+            console.expect("Enter netmask")
+            console.sendline(netmask)
+            console.expect("Enter gateway")
+            console.sendline(gateway)
+            console.expect("Enter VLAN")
+            console.sendline("")
+
+            idx = console.expect_one_of(
+                ["Enter DSCP", "Configure IPv6", "Become grid member"],
+                timeout=30,
+            )
+            if idx == 0:
+                console.sendline("")
+                console.expect("Configure IPv6")
+                console.sendline("n")
+            elif idx == 1:
+                console.sendline("n")
+
+            if idx != 2:
+                console.expect("Become grid member")
+            console.sendline("n")
+
+            console.expect("Is this correct")
+            console.sendline("y")
+            console.expect("Are you sure")
+            console.sendline("y")
+            console.expect("Network settings have been updated", timeout=60)
+
+        self._logger.info("Network configured — waiting %ds for NIOS reboot", reboot_timeout)
+        time.sleep(reboot_timeout)
+        return ip
+
     def __repr__(self) -> str:
         return f"NiosContainer({self.container_name!r})"
 
 
-class LocalNiosContainer(NiosContainer):
+class LocalNiosContainer(LocalNetworkMixin, NiosContainer):
 
     @classmethod
     def from_config(cls, config: LocalContainerConfig) -> LocalNiosContainer:
@@ -168,127 +218,6 @@ class LocalNiosContainer(NiosContainer):
             yield session
         finally:
             session._close()
-
-    def _get_container_network(self) -> tuple[str, int]:
-        _, out, _ = self._transport.run_on_host(
-            f"docker inspect {self.container_name}",
-        )
-        data = json.loads(out)
-        networks = data[0]["NetworkSettings"]["Networks"]
-        if "ncc_lan1" not in networks:
-            raise RuntimeError(
-                f"No ncc_lan1 network on {self.container_name} — "
-                "is the container running with NCC networking?"
-            )
-        net = networks["ncc_lan1"]
-        ip = net["IPAddress"]
-        prefix = int(net["IPPrefixLen"])
-        if not ip:
-            raise RuntimeError(f"ncc_lan1 has no IP on {self.container_name}")
-        return ip, prefix
-
-    def get_container_ip(self) -> str:
-        ip, _ = self._get_container_network()
-        return ip
-
-    def _find_forwarding_bridge(self) -> str | None:
-        _, out, _ = self._transport.run(
-            'for eth in /sys/class/net/eth*/iflink; do cat "$eth" 2>/dev/null; done',
-            check=False,
-        )
-        indices = out.strip().split()
-        if not indices:
-            return None
-
-        _, links_out, _ = self._transport.run_on_host("ip -o link show", check=False)
-
-        for idx in indices:
-            veth = None
-            for line in links_out.splitlines():
-                parts = line.split()
-                if parts and parts[0] == f"{idx}:":
-                    veth = parts[1].split("@")[0]
-                    break
-            if not veth:
-                continue
-
-            _, bridge_out, _ = self._transport.run_on_host(
-                f"bridge link show dev {veth}", check=False
-            )
-            if "state forwarding" not in bridge_out:
-                continue
-
-            _, link_out, _ = self._transport.run_on_host(
-                f"ip -o link show dev {veth}", check=False
-            )
-            m = re.search(r"master (\S+)", link_out)
-            if m:
-                return m.group(1)
-
-        return None
-
-    def set_network(self, reboot_timeout: int = NIOS_REBOOT_TIMEOUT, wapi_timeout: int = NIOS_WAPI_READY_TIMEOUT) -> str:
-        ip, prefix = self._get_container_network()
-        netmask = {16: "255.255.0.0", 24: "255.255.255.0"}.get(prefix, "255.255.0.0")
-        gateway = ip.rsplit(".", 1)[0] + ".1"
-
-        log.info(
-            "Configuring NIOS network: IP=%s netmask=%s gateway=%s",
-            ip, netmask, gateway,
-        )
-
-        with self.console_session() as console:
-            console.sendline("set network")
-            console.expect("Enter IPv4 address")
-            console.sendline(ip)
-            console.expect("Enter netmask")
-            console.sendline(netmask)
-            console.expect("Enter gateway")
-            console.sendline(gateway)
-            console.expect("Enter VLAN")
-            console.sendline("")
-
-            idx = console.expect_one_of(
-                ["Enter DSCP", "Configure IPv6", "Become grid member"],
-                timeout=30,
-            )
-            if idx == 0:
-                console.sendline("")
-                console.expect("Configure IPv6")
-                console.sendline("n")
-            elif idx == 1:
-                console.sendline("n")
-
-            if idx != 2:
-                console.expect("Become grid member")
-            console.sendline("n")
-
-            console.expect("Is this correct")
-            console.sendline("y")
-            console.expect("Are you sure")
-            console.sendline("y")
-            console.expect("Network settings have been updated", timeout=60)
-
-        log.info("Network configured — waiting %ds for NIOS reboot", reboot_timeout)
-        time.sleep(reboot_timeout)
-
-        log.info("Polling WAPI (up to %ds)", wapi_timeout)
-        self._wait_for_wapi(timeout=wapi_timeout)
-        log.info("NIOS is back up at %s", ip)
-
-        bridge = self._find_forwarding_bridge()
-        if bridge:
-            rc, _, err = self._transport.run_on_host(
-                f"sudo ip route replace {ip}/32 dev {bridge}", check=False
-            )
-            if rc == 0:
-                log.info("Route: %s/32 → %s", ip, bridge)
-            else:
-                log.warning("Could not add host route: %s", err.strip())
-        else:
-            log.warning("No forwarding bridge found — host route not added")
-
-        return ip
 
     def __repr__(self) -> str:
         return f"LocalNiosContainer({self.container_name!r})"

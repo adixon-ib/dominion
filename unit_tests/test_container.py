@@ -2,8 +2,10 @@
 
 Config-wiring tests carried over from the pre-split test_container.py.
 New coverage: _wait_for_wapi, restart(), and LocalNiosContainer's previously
-untested parsing logic (_get_container_network, _find_forwarding_bridge,
-set_network) — all driven with a FakeTransport, never a real docker/ssh call.
+untested parsing logic (_get_container_network, _find_forwarding_bridge —
+implemented in network.py's LocalNetworkMixin, layered on NiosContainer's shared
+_configure_network_console) — all driven with a FakeTransport, never a real
+docker/ssh call.
 """
 
 import json
