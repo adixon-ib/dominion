@@ -218,6 +218,11 @@ class ShellSession(BaseSession):
 
     PROMPT_PATTERN = r"\S+@\S+:[^#$]*[#$]\s*"
 
+    # Unique sentinel appended after a command (see run() below) to smuggle
+    # its exit code back through plain terminal output, since pexpect has
+    # no built-in way to read a command's $?.
+    _RC_MARKER = "___NIOS_TEST_RC___"
+
     def __init__(
         self,
         spawn_cmd: str,
@@ -230,6 +235,82 @@ class ShellSession(BaseSession):
             logger=logger,
             timeout=timeout,
         )
+        self._last_exit_code: int | None = None
+
+    @property
+    def last_exit_code(self) -> int | None:
+        return self._last_exit_code
+
+    @override
+    def run(self, cmd: str, timeout: float | None = None) -> str:
+        """Run cmd and return its output.
+
+        For a single command that goes straight back to the prompt with no
+        follow-up questions, like "pgrep -f token_aggregator".
+        
+        Use when a failing exit code doesn't need
+        to abort the script, either because it's an expected outcome you'll
+        branch on (check `last_exit_code` yourself), or because you
+        don't need to verify success at all. Use run_with_check() when
+        failure should abort the script.
+
+        Args:
+            timeout: Defaults to the session's default timeout if None.
+
+        Returns:
+            The command's output, with the echoed command line stripped.
+
+        Example:
+            run("pgrep -f token_aggregator") against a running process (A)
+            vs. one that isn't (B):
+
+            A: process running   -> result="1234", last_exit_code=0
+            B: process not found -> result="",     last_exit_code=1
+
+            Both are normal outcomes here. Check last_exit_code or the
+            output to decide, rather than treating B as an error.
+        """
+        self.sendline(f"{cmd}; echo {self._RC_MARKER}:$?")
+        self.expect(self._prompt_pattern, timeout=timeout)
+        text = self._child.before or ""
+        text = self._clean(text)
+        lines = text.split("\n")
+        if lines and cmd in lines[0]:
+            lines = lines[1:]
+
+        rc = None
+        if lines and lines[-1].startswith(self._RC_MARKER):
+            rc = int(lines[-1].split(":", 1)[1])
+            lines = lines[:-1]
+        self._last_exit_code = rc
+
+        result = "\n".join(lines).strip()
+        if result:
+            self._logger.info("%s", result)
+        if self._last_prompt:
+            self._logger.info("%s", self._last_prompt)
+        return result
+
+    def run_with_check(self, cmd: str, timeout: float | None = None) -> str:
+        """Like run(), but raises if cmd exits nonzero.
+
+        Use when success is required and failure should abort the script.
+        If the exit code can't be determined (e.g. a backgrounded command),
+        treats it as success rather than failing closed.
+
+        Returns:
+            The command's output.
+
+        Raises:
+            RuntimeError: If cmd exits with a nonzero status.
+        """
+        result = self.run(cmd, timeout=timeout)
+        if self._last_exit_code not in (None, 0):
+            raise RuntimeError(
+                f"Command failed (rc={self._last_exit_code}): {cmd!r}. "
+                f"Output: {result!r}"
+            )
+        return result
 
 
 class ConsoleSession(BaseSession):

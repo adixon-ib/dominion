@@ -78,22 +78,92 @@ def test_expect_one_of_timeout_raises_timeout_error(fake_child_factory):
 
 def test_run_strips_echoed_command_from_output(fake_child_factory):
     s = ShellSession(spawn_cmd="fake")
-    child = fake_child_factory(script=[(0, "echo hello\r\nhello\r\n", "user@host:~$ ")])
+    child = fake_child_factory(script=[
+        (0, "echo hello; echo ___NIOS_TEST_RC___:$?\r\nhello\r\n___NIOS_TEST_RC___:0\r\n", "user@host:~$ "),
+    ])
     s._child = child
 
     result = s.run("echo hello")
 
     assert result == "hello"
-    assert ("sendline", "echo hello") in child.sent
+    assert ("sendline", "echo hello; echo ___NIOS_TEST_RC___:$?") in child.sent
 
 
 def test_run_keeps_output_when_echo_not_present(fake_child_factory):
     s = ShellSession(spawn_cmd="fake")
-    s._child = fake_child_factory(script=[(0, "some output\r\n", "user@host:~$ ")])
+    s._child = fake_child_factory(
+        script=[(0, "some output\r\n___NIOS_TEST_RC___:0\r\n", "user@host:~$ ")]
+    )
 
     result = s.run("something")
 
     assert result == "some output"
+
+
+def test_run_sets_last_exit_code_on_success(fake_child_factory):
+    s = ShellSession(spawn_cmd="fake")
+    s._child = fake_child_factory(
+        script=[(0, "some output\r\n___NIOS_TEST_RC___:0\r\n", "user@host:~$ ")]
+    )
+
+    s.run("something")
+
+    assert s.last_exit_code == 0
+
+
+def test_run_sets_last_exit_code_on_failure(fake_child_factory):
+    s = ShellSession(spawn_cmd="fake")
+    s._child = fake_child_factory(
+        script=[(0, "boom\r\n___NIOS_TEST_RC___:1\r\n", "user@host:~$ ")]
+    )
+
+    result = s.run("false")
+
+    assert result == "boom"
+    assert s.last_exit_code == 1
+
+
+def test_run_last_exit_code_none_when_marker_missing(fake_child_factory):
+    s = ShellSession(spawn_cmd="fake")
+    s._child = fake_child_factory(script=[(0, "no marker here\r\n", "user@host:~$ ")])
+
+    s.run("something")
+
+    assert s.last_exit_code is None
+
+
+# -- run_with_check() ----------------------------------------------------------------
+
+def test_run_with_check_returns_output_on_success(fake_child_factory):
+    s = ShellSession(spawn_cmd="fake")
+    s._child = fake_child_factory(
+        script=[(0, "ok\r\n___NIOS_TEST_RC___:0\r\n", "user@host:~$ ")]
+    )
+
+    result = s.run_with_check("something")
+
+    assert result == "ok"
+    assert s.last_exit_code == 0
+
+
+def test_run_with_check_raises_on_nonzero_exit(fake_child_factory):
+    s = ShellSession(spawn_cmd="fake")
+    s._child = fake_child_factory(
+        script=[(0, "boom\r\n___NIOS_TEST_RC___:1\r\n", "user@host:~$ ")]
+    )
+
+    with pytest.raises(RuntimeError, match="rc=1"):
+        s.run_with_check("false")
+
+
+def test_run_with_check_does_not_raise_when_marker_missing(fake_child_factory):
+    s = ShellSession(spawn_cmd="fake")
+    s._child = fake_child_factory(script=[(0, "no marker here\r\n", "user@host:~$ ")])
+
+    result = s.run_with_check("something")
+
+    assert result == "no marker here"
+    assert s.last_exit_code is None
 
 
 # -- ShellSession spawn_cmd construction --------------------------------------------
