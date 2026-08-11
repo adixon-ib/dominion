@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import logging
 import subprocess
 import time
 from typing import TYPE_CHECKING
@@ -21,6 +20,7 @@ from .transport import LocalDockerTransport, SSHDockerTransport
 
 if TYPE_CHECKING:
     from .deploy import DeployResult
+    from .log import NiosLogger
 
 
 def ssh_reachable(host: str, timeout: int = 5) -> bool:
@@ -38,7 +38,7 @@ def ssh_reachable(host: str, timeout: int = 5) -> bool:
 
 class _ApplianceBase:
 
-    def __init__(self, container: NiosContainer, logger: logging.Logger):
+    def __init__(self, container: NiosContainer, logger: NiosLogger):
         self.container = container
         self._logger = logger
 
@@ -74,7 +74,7 @@ class Appliance(_ApplianceBase):
     def __init__(
         self,
         container: NiosContainer,
-        logger: logging.Logger,
+        logger: NiosLogger,
         hostname: str,
         ip: str | None = None,
         console_user: str = NIOS_CONSOLE_USER,
@@ -103,6 +103,7 @@ class Appliance(_ApplianceBase):
             user=config.user,
             key_path=config.key_path,
             port=config.port,
+            logger=logger,
         )
         container = NiosContainer(
             container_name=config.container_name,
@@ -219,7 +220,7 @@ class LocalAppliance(_ApplianceBase):
     def __init__(
         self,
         container: NiosContainer,
-        logger: logging.Logger,
+        logger: NiosLogger,
         ip: str,
     ):
         super().__init__(container, logger)
@@ -232,7 +233,7 @@ class LocalAppliance(_ApplianceBase):
             level=config.log_level,
             log_file=config.log_file,
         )
-        transport = LocalDockerTransport(container_name=config.container_name)
+        transport = LocalDockerTransport(container_name=config.container_name, logger=logger)
         container = LocalNiosContainer(
             container_name=config.container_name,
             transport=transport,
@@ -254,6 +255,12 @@ class LocalAppliance(_ApplianceBase):
     @property
     def ip(self) -> str:
         return self._ip
+
+    @property
+    def hostname(self) -> str:
+        # No real network hostname (local docker exec, no SSH hop) - container
+        # name disambiguates between containers on the same machine.
+        return self.container.container_name
 
     def __repr__(self) -> str:
         return f"LocalAppliance(container={self.container.container_name!r}, ip={self._ip!r})"
