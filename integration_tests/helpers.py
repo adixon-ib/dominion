@@ -14,6 +14,7 @@ pytest's own argv (file paths, -m expressions), not an appliance IP.
 """
 
 import os
+import subprocess
 import sys
 import time
 import traceback
@@ -77,6 +78,26 @@ def is_ncc_up(container_name=DEFAULT_CONTAINER) -> bool:
 
 def is_appliance_up(ip=None) -> bool:
     return ssh_reachable(ip or resolve_ip())
+
+
+def disable_ssh_rate_limit(ip=None) -> None:
+    """Flush the appliance's SSH_RATE_LIMIT iptables chain. Each appliance
+    integration test opens its own fresh SSH connection (shell_session()/
+    console_session() don't reuse one), and a full run can exceed the
+    default 10-connections/60s limit, causing later tests to fail with a
+    silent connection timeout rather than a real error. Mirrors the
+    nios_fix_ssh shell function."""
+    ip = ip or resolve_ip()
+    subprocess.run(
+        [
+            "ssh", "-o", "StrictHostKeyChecking=no", f"root@{ip}",
+            "docker exec nios bash -c "
+            "'iptables -F SSH_RATE_LIMIT && "
+            "iptables -I SSH_RATE_LIMIT -j RETURN && "
+            "touch /infoblox/var/debug_ssh_enabled'",
+        ],
+        capture_output=True, timeout=15,
+    )
 
 
 def appliance_config(log_level=LOG_LEVEL):

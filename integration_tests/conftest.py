@@ -27,6 +27,7 @@ from helpers import (
     APPLIANCE_DOWN_REASON,
     NCC_DOWN_REASON,
     appliance_config,
+    disable_ssh_rate_limit,
     get_ncc_ip,
     is_appliance_up,
     is_ncc_up,
@@ -97,7 +98,16 @@ def _record_run_properties(record_testsuite_property, request):
 # -- Appliance / container fixtures (session-scoped: built once per run) ---------
 
 @pytest.fixture(scope="session")
-def ssh_appliance():
+def _ssh_rate_limit_cleared():
+    """Each test opens its own fresh SSH connection — a full appliance run
+    can trip the SSH_RATE_LIMIT firewall rule, so clear it once up front.
+    Session-scoped so it only runs once even if both ssh_appliance and
+    ssh_container are used in the same run."""
+    disable_ssh_rate_limit()
+
+
+@pytest.fixture(scope="session")
+def ssh_appliance(_ssh_rate_limit_cleared):
     if not is_appliance_up():
         pytest.skip(APPLIANCE_DOWN_REASON)
     return Appliance.from_config(appliance_config())
