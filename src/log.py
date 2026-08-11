@@ -78,16 +78,15 @@ def resolve_log_file(
     return None
 
 
-def _setup_root_file_handler(log_file: str, level: str) -> None:
-    root = logging.getLogger("nios_test")
-    for h in root.handlers:
-        if isinstance(h, logging.FileHandler) and h.baseFilename == os.path.abspath(log_file):
+def _add_file_handler(logger: logging.Logger, log_file: str, level: str) -> None:
+    abspath = os.path.abspath(log_file)
+    for h in logger.handlers:
+        if isinstance(h, logging.FileHandler) and h.baseFilename == abspath:
             return
-    root.setLevel(VERBOSE_EX)
     fh = logging.FileHandler(log_file)
     fh.setLevel(VERBOSE_EX)
     fh.setFormatter(_FORMATTER_FOR_LEVEL[level])
-    root.addHandler(fh)
+    logger.addHandler(fh)
 
 
 def create_logger(
@@ -99,17 +98,20 @@ def create_logger(
         raise ValueError(f"Unknown level {level!r}, expected one of {list(LEVEL_MAP)}")
 
     logger = logging.getLogger(name)
-    logger.setLevel(LEVEL_MAP[level])
+    # Let everything through the logger itself; each handler filters to its
+    # own verbosity below.
+    logger.setLevel(VERBOSE_EX)
     logger.handlers.clear()
 
     formatter = _FORMATTER_FOR_LEVEL[level]
 
     console = logging.StreamHandler(sys.stderr)
+    console.setLevel(LEVEL_MAP[level])
     console.setFormatter(formatter)
     logger.addHandler(console)
 
     if log_file:
-        _setup_root_file_handler(log_file, level)
+        _add_file_handler(logger, log_file, level)
 
     logger.propagate = True
     return logger

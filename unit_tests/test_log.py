@@ -52,22 +52,48 @@ def test_create_logger_rejects_unknown_level():
 ])
 def test_create_logger_sets_level_and_formatter(level, expected_level, formatter_cls):
     logger = create_logger(name=f"nios_test.unit.level_{level}", level=level)
-    assert logger.level == expected_level
+    # The logger itself stays maximally permissive (VERBOSE_EX) so a file
+    # handler can always capture full detail regardless of console
+    # verbosity -- the requested `level` is enforced by the console
+    # handler instead.
+    assert logger.handlers[0].level == expected_level
     assert len(logger.handlers) == 1
     assert isinstance(logger.handlers[0].formatter, formatter_cls)
 
 
 def test_create_logger_off_level_is_above_critical():
     logger = create_logger(name="nios_test.unit.off", level="off")
-    assert logger.level > logging.CRITICAL
+    assert logger.handlers[0].level > logging.CRITICAL
 
 
 def test_create_logger_with_log_file_adds_file_handler(tmp_path):
     log_file = str(tmp_path / "run.log")
-    create_logger(name="nios_test.unit.with_file", level="info", log_file=log_file)
-    root = logging.getLogger("nios_test")
-    file_handlers = [h for h in root.handlers if isinstance(h, logging.FileHandler)]
+    logger = create_logger(name="nios_test.unit.with_file", level="info", log_file=log_file)
+    file_handlers = [h for h in logger.handlers if isinstance(h, logging.FileHandler)]
     assert any(h.baseFilename == log_file for h in file_handlers)
+
+
+def test_create_logger_file_handler_is_scoped_to_its_own_logger(tmp_path):
+    """Two loggers with distinct log files must not see each other's
+    FileHandler -- each logger owns its own handler, not a shared
+    ancestor, so records from one never fan out into the other's file."""
+    log_file_a = str(tmp_path / "a.log")
+    log_file_b = str(tmp_path / "b.log")
+    logger_a = create_logger(name="nios_test.unit.scope_a", level="info", log_file=log_file_a)
+    logger_b = create_logger(name="nios_test.unit.scope_b", level="info", log_file=log_file_b)
+
+    logger_a.info("from a")
+    logger_b.info("from b")
+
+    with open(log_file_a) as f:
+        content_a = f.read()
+    with open(log_file_b) as f:
+        content_b = f.read()
+
+    assert "from a" in content_a
+    assert "from b" not in content_a
+    assert "from b" in content_b
+    assert "from a" not in content_b
 
 
 def test_create_logger_clears_previous_handlers():
