@@ -1,4 +1,4 @@
-from .src.config import ApplianceConfig, LocalApplianceConfig, ContainerConfig, LocalContainerConfig, GridConfig, BuildConfig
+from .src.config import ApplianceConfig, LocalApplianceConfig, LocalContainerConfig, GridConfig, BuildConfig
 from .src.grid import Grid
 from .src.build import NiosBuild
 from .src.appliance import Appliance, LocalAppliance, ssh_reachable
@@ -19,7 +19,6 @@ __all__ = [
     "LocalAppliance",
     "LocalApplianceConfig",
     "ssh_reachable",
-    "ContainerConfig",
     "LocalContainerConfig",
     "NiosContainer",
     "LocalNiosContainer",

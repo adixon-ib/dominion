@@ -1,34 +1,14 @@
 from __future__ import annotations
 
-import logging
 import uuid
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 from .constants import NIOS_CONSOLE_USER, NIOS_CONSOLE_PASSWORD
 from .log import resolve_log_file
 
-
-@dataclass
-class ContainerConfig:
-    container_name: str
-    host: str
-    chroot: str = "/local/91/aslan_chroot"
-    worktree: str | None = None
-    user: str = "root"
-    key_path: str | None = None
-    port: int = 22
-    console_user: str = NIOS_CONSOLE_USER
-    console_password: str = NIOS_CONSOLE_PASSWORD
-    log_level: str = "info"
-    log_file: str | None = None
-    output_dir: str | None = None
-    logger: logging.Logger | None = field(default=None, repr=False)
-
-    def __post_init__(self):
-        if not self.log_file and self.output_dir:
-            self.log_file = resolve_log_file(
-                self.container_name, output_dir=self.output_dir,
-            )
+if TYPE_CHECKING:
+    from .log import NiosLogger
 
 
 @dataclass
@@ -41,7 +21,7 @@ class LocalContainerConfig:
     log_level: str = "info"
     log_file: str | None = None
     output_dir: str | None = None
-    logger: logging.Logger | None = field(default=None, repr=False)
+    logger: NiosLogger | None = field(default=None, repr=False)
 
     def __post_init__(self):
         if not self.log_file and self.output_dir:
@@ -65,7 +45,7 @@ class ApplianceConfig:
     log_level: str = "info"
     log_file: str | None = None
     output_dir: str | None = None
-    logger: logging.Logger | None = field(default=None, repr=False)
+    logger: NiosLogger | None = field(default=None, repr=False)
 
     def __post_init__(self):
         if self.container_name is None:
@@ -87,7 +67,7 @@ class LocalApplianceConfig:
     log_level: str = "info"
     log_file: str | None = None
     output_dir: str | None = None
-    logger: logging.Logger | None = field(default=None, repr=False)
+    logger: NiosLogger | None = field(default=None, repr=False)
 
     def __post_init__(self):
         if not self.log_file and self.output_dir:
@@ -114,7 +94,7 @@ class GridConfig:
     log_level: str = "info"
     log_file: str | None = None
     output_dir: str | None = None
-    logger: logging.Logger | None = field(default=None, repr=False)
+    logger: NiosLogger | None = field(default=None, repr=False)
 
     def __post_init__(self):
         if self.setup_dir == "/tmp/my_setup" and self.tag == "mygrid":
@@ -136,7 +116,7 @@ class BuildConfig:
     log_level: str = "info"
     log_file: str | None = None
     output_dir: str | None = None
-    logger: logging.Logger | None = field(default=None, repr=False)
+    logger: NiosLogger | None = field(default=None, repr=False)
 
     def __post_init__(self):
         if self.chroot is None:

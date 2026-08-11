@@ -16,7 +16,6 @@ from contextlib import contextmanager
 import pytest
 
 from nios_test import (
-    ContainerConfig,
     LocalContainerConfig,
     LocalDockerTransport,
     LocalNiosContainer,
@@ -28,12 +27,7 @@ LOGGER = logging.getLogger("nios_test.unit_test")
 DEFAULT_CHROOT = "/local/91/chroots/balerion"
 
 
-# -- ContainerConfig / from_config wiring (carried over from mixed test file) --
-
-def test_config_ssh_requires_host():
-    cfg = ContainerConfig(container_name="nios", host="10.35.211.4")
-    assert cfg.host == "10.35.211.4"
-
+# -- LocalContainerConfig / from_config wiring (carried over from mixed test file) --
 
 def test_config_output_dir_resolves_log_file():
     with tempfile.TemporaryDirectory() as d:
@@ -48,15 +42,6 @@ def test_from_config_local_creates_local_transport():
     container = LocalNiosContainer.from_config(cfg)
     assert isinstance(container._transport, LocalDockerTransport)
     assert container._transport.container_name == "balerion"
-
-
-def test_from_config_ssh_creates_ssh_transport():
-    cfg = ContainerConfig(
-        container_name="nios", host="10.35.211.4", chroot=DEFAULT_CHROOT,
-    )
-    container = NiosContainer.from_config(cfg)
-    assert isinstance(container._transport, SSHDockerTransport)
-    assert container._transport.host == "10.35.211.4"
 
 
 def test_from_config_logger_name():

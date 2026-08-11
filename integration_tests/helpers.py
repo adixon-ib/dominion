@@ -22,7 +22,6 @@ from datetime import datetime
 from nios_test import (
     ApplianceConfig,
     BuildConfig,
-    ContainerConfig,
     LocalApplianceConfig,
     LocalContainerConfig,
     LocalDockerTransport,
@@ -84,17 +83,6 @@ def appliance_config(log_level=LOG_LEVEL):
     return ApplianceConfig(
         hostname=DEFAULT_HOSTNAME,
         ip=resolve_ip(),
-        chroot=DEFAULT_CHROOT,
-        worktree=DEFAULT_WORKTREE,
-        log_level=log_level,
-        output_dir=OUTPUT_DIR,
-    )
-
-
-def container_config(log_level=LOG_LEVEL):
-    return ContainerConfig(
-        container_name="nios",
-        host=resolve_ip(),
         chroot=DEFAULT_CHROOT,
         worktree=DEFAULT_WORKTREE,
         log_level=log_level,

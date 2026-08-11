@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-import logging
 import time
 from contextlib import contextmanager
+from typing import TYPE_CHECKING
 
-from .config import ContainerConfig, LocalContainerConfig
+from .config import LocalContainerConfig
 from .constants import (
     NIOS_CONSOLE_USER,
     NIOS_CONSOLE_PASSWORD,
@@ -17,12 +17,22 @@ from .deploy import DeployMixin
 from .log import create_logger
 from .network import LocalNetworkMixin
 from .session import ShellSession, ConsoleSession
-from .transport import LocalDockerTransport, SSHDockerTransport
+from .transport import LocalDockerTransport
 
-log = logging.getLogger(__name__)
+if TYPE_CHECKING:
+    from .log import NiosLogger
+
+log = create_logger(name=__name__)
 
 
 class NiosContainer(DeployMixin):
+    """Docker-exec access to NIOS running on a real appliance over SSH.
+
+    Construct only via Appliance/LocalAppliance, which establish the
+    identity guarantees this class assumes (e.g. SSH reachability) before
+    handing back a container. For NCC (no separate host identity), use
+    LocalNiosContainer.from_config() directly.
+    """
 
     def __init__(
         self,
@@ -30,7 +40,7 @@ class NiosContainer(DeployMixin):
         transport,
         chroot: str,
         worktree: str | None = None,
-        logger: logging.Logger | None = None,
+        logger: NiosLogger | None = None,
         console_user: str = NIOS_CONSOLE_USER,
         console_password: str = NIOS_CONSOLE_PASSWORD,
     ):
@@ -41,30 +51,6 @@ class NiosContainer(DeployMixin):
         self._logger = logger or log
         self._console_user = console_user
         self._console_password = console_password
-
-    @classmethod
-    def from_config(cls, config: ContainerConfig) -> NiosContainer:
-        logger = config.logger or create_logger(
-            name=f"nios_test.{config.container_name}",
-            level=config.log_level,
-            log_file=config.log_file,
-        )
-        transport = SSHDockerTransport(
-            host=config.host,
-            container_name=config.container_name,
-            user=config.user,
-            key_path=config.key_path,
-            port=config.port,
-        )
-        return cls(
-            container_name=config.container_name,
-            transport=transport,
-            chroot=config.chroot,
-            worktree=config.worktree,
-            logger=logger,
-            console_user=config.console_user,
-            console_password=config.console_password,
-        )
 
     @contextmanager
     def shell_session(self, logger=None, timeout=30):
@@ -181,6 +167,11 @@ class NiosContainer(DeployMixin):
 
 
 class LocalNiosContainer(LocalNetworkMixin, NiosContainer):
+    """Docker-exec access to NIOS running in a local NCC container.
+
+    Safe to construct standalone via from_config() — unlike NiosContainer,
+    there's no separate appliance identity to establish first.
+    """
 
     @classmethod
     def from_config(cls, config: LocalContainerConfig) -> LocalNiosContainer:
@@ -189,7 +180,7 @@ class LocalNiosContainer(LocalNetworkMixin, NiosContainer):
             level=config.log_level,
             log_file=config.log_file,
         )
-        transport = LocalDockerTransport(container_name=config.container_name)
+        transport = LocalDockerTransport(container_name=config.container_name, logger=logger)
         return cls(
             container_name=config.container_name,
             transport=transport,

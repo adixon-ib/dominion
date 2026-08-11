@@ -6,37 +6,12 @@ No I/O, no transport, no network — these are plain dataclasses.
 from nios_test import (
     ApplianceConfig,
     BuildConfig,
-    ContainerConfig,
     GridConfig,
     LocalApplianceConfig,
     LocalContainerConfig,
 )
 
-# -- ContainerConfig / LocalContainerConfig -----------------------------------
-
-def test_container_config_stores_required_fields():
-    cfg = ContainerConfig(container_name="nios", host="10.35.211.4")
-    assert cfg.container_name == "nios"
-    assert cfg.host == "10.35.211.4"
-    assert cfg.chroot == "/local/91/aslan_chroot"
-    assert cfg.log_file is None
-
-
-def test_container_config_output_dir_resolves_log_file(tmp_path):
-    cfg = ContainerConfig(
-        container_name="nios", host="10.35.211.4", output_dir=str(tmp_path),
-    )
-    assert cfg.log_file == str(tmp_path / "nios.log")
-
-
-def test_container_config_explicit_log_file_wins_over_output_dir(tmp_path):
-    explicit = str(tmp_path / "explicit.log")
-    cfg = ContainerConfig(
-        container_name="nios", host="10.35.211.4",
-        log_file=explicit, output_dir=str(tmp_path),
-    )
-    assert cfg.log_file == explicit
-
+# -- LocalContainerConfig -------------------------------------------------------
 
 def test_local_container_config_output_dir_resolves_log_file(tmp_path):
     cfg = LocalContainerConfig(container_name="balerion", output_dir=str(tmp_path))

@@ -27,14 +27,13 @@ from helpers import (
     APPLIANCE_DOWN_REASON,
     NCC_DOWN_REASON,
     appliance_config,
-    container_config,
     get_ncc_ip,
     is_appliance_up,
     is_ncc_up,
     local_appliance_config,
     local_container_config,
 )
-from nios_test import Appliance, LocalAppliance, LocalNiosContainer, NiosContainer
+from nios_test import Appliance, LocalAppliance, LocalNiosContainer
 
 _RESULTS_BASE = os.environ.get(
     "NIOS_TEST_OUTPUT_DIR", "/blox/adixon1/scripts/nios_test/results",
@@ -110,10 +109,8 @@ def ssh_transport(ssh_appliance):
 
 
 @pytest.fixture(scope="session")
-def ssh_container():
-    if not is_appliance_up():
-        pytest.skip(APPLIANCE_DOWN_REASON)
-    return NiosContainer.from_config(container_config(log_level="verbose"))
+def ssh_container(ssh_appliance):
+    return ssh_appliance.container
 
 
 @pytest.fixture(scope="session")
