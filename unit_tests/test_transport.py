@@ -13,7 +13,6 @@ from nios_test import (
     LocalDockerTransport,
     SSHDockerTransport,
     TransportError,
-    connect,
 )
 
 
@@ -36,23 +35,6 @@ def _install_fake_run(monkeypatch, module, returncode=0, stdout="", stderr=""):
 
 
 # -- SSHDockerTransport ----------------------------------------------------------
-
-def test_ssh_host_cmd_prefix_basic():
-    t = SSHDockerTransport(host="10.35.211.4", container_name="nios")
-    assert t.host_cmd_prefix == (
-        "ssh -o StrictHostKeyChecking=no -o LogLevel=ERROR "
-        "-o ConnectTimeout=10 root@10.35.211.4"
-    )
-
-
-def test_ssh_host_cmd_prefix_includes_port_and_key():
-    t = SSHDockerTransport(
-        host="10.35.211.4", port=2222, key_path="/home/x/.ssh/id_rsa",
-    )
-    prefix = t.host_cmd_prefix
-    assert "-p 2222" in prefix
-    assert "-i /home/x/.ssh/id_rsa" in prefix
-
 
 def test_ssh_run_builds_docker_exec_over_ssh(monkeypatch):
     import nios_test.src.transport as transport_mod
@@ -97,6 +79,23 @@ def test_ssh_run_check_false_returns_nonzero_without_raising(monkeypatch):
     code, _, err = t.run("false", check=False)
     assert code == 1
     assert err == "boom"
+
+
+def test_ssh_build_exec_cmd_no_tty():
+    t = SSHDockerTransport(host="10.35.211.4")
+    assert t.build_exec_cmd("docker exec -it nios /bin/bash") == (
+        "ssh -o StrictHostKeyChecking=no -o LogLevel=ERROR "
+        "-o ConnectTimeout=10 root@10.35.211.4 docker exec -it nios /bin/bash"
+    )
+
+
+def test_ssh_build_exec_cmd_with_tty_inserts_tt():
+    t = SSHDockerTransport(host="10.35.211.4")
+    cmd = t.build_exec_cmd("docker exec -it nios /bin/bash", tty=True)
+    assert cmd == (
+        "ssh -tt -o StrictHostKeyChecking=no -o LogLevel=ERROR "
+        "-o ConnectTimeout=10 root@10.35.211.4 docker exec -it nios /bin/bash"
+    )
 
 
 def test_ssh_checksum_parses_md5sum_output(monkeypatch):
@@ -160,6 +159,13 @@ def test_ssh_upload_raises_when_local_file_missing():
 
 
 # -- LocalDockerTransport --------------------------------------------------------
+
+def test_local_build_exec_cmd_returns_cmd_unchanged():
+    t = LocalDockerTransport(container_name="balerion")
+    cmd = "docker exec -it balerion /bin/bash"
+    assert t.build_exec_cmd(cmd) == cmd
+    assert t.build_exec_cmd(cmd, tty=True) == cmd
+
 
 def test_local_run_builds_docker_exec_bash_c(monkeypatch):
     import nios_test.src.transport as transport_mod
@@ -235,20 +241,6 @@ def test_local_checksum_parses_md5sum_output(monkeypatch):
     t = LocalDockerTransport(container_name="balerion")
 
     assert t.checksum("/etc/hostname") == "cafebabe00112233445566778899aabb"
-
-
-# -- connect() --------------------------------------------------------------------
-
-def test_connect_no_host_returns_local_transport():
-    t = connect(host=None, container_name="balerion")
-    assert isinstance(t, LocalDockerTransport)
-    assert t.container_name == "balerion"
-
-
-def test_connect_with_host_returns_ssh_transport():
-    t = connect(host="10.35.211.4", container_name="nios", user="root")
-    assert isinstance(t, SSHDockerTransport)
-    assert t.host == "10.35.211.4"
 
 
 # -- CommandError -----------------------------------------------------------------

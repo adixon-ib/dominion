@@ -11,7 +11,6 @@ from .src.transport import (
     LocalDockerTransport,
     SSHDockerTransport,
     TransportError,
-    connect,
 )
 
 __all__ = [
@@ -32,7 +31,6 @@ __all__ = [
     "CommandError",
     "SSHDockerTransport",
     "LocalDockerTransport",
-    "connect",
     "create_logger",
     "resolve_log_file",
     "Grid",
