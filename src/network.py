@@ -106,8 +106,8 @@ class LocalNetworkMixin:
             if rc == 0:
                 self._logger.info("Route: %s/32 → %s", ip, bridge)
             else:
-                self._logger.warning("Could not add host route: %s", err.strip())
+                self._logger.info("Could not add host route: %s", err.strip())
         else:
-            self._logger.warning("No forwarding bridge found — host route not added")
+            self._logger.info("No forwarding bridge found — host route not added")
 
         return ip

@@ -1,0 +1,9 @@
+{
+  "hostname": "vm-04-89",
+  "ip": "10.35.211.4",
+  "chroot": "/local/91/chroots/balerion",
+  "worktree": "/blox/adixon1/<TICKET>-<slug>",
+  "container": "balerion",
+  "log_level": "info",
+  "output_dir": null
+}

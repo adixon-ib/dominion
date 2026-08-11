@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import os
 import uuid
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
@@ -10,6 +12,31 @@ from .log import resolve_log_file
 if TYPE_CHECKING:
     from .log import NiosLogger
 
+_DEFAULT_CONFIG_PATH = os.path.join(os.path.dirname(__file__), "config.json")
+
+
+@dataclass
+class Defaults:
+    hostname: str
+    ip: str
+    chroot: str
+    worktree: str
+    container: str
+    log_level: str
+    output_dir: str | None = None
+
+    @classmethod
+    def from_json(cls, path: str | None = None) -> "Defaults":
+        path = path or _DEFAULT_CONFIG_PATH
+        if not os.path.exists(path):
+            raise FileNotFoundError(
+                f"{path} not found. Copy config.example.json to config.json "
+                "and fill in your hostname/ip/chroot/worktree/container."
+            )
+        with open(path) as f:
+            data = json.load(f)
+        return cls(**data)
+
 
 @dataclass
 class LocalContainerConfig:
@@ -19,7 +46,7 @@ class LocalContainerConfig:
     console_user: str = NIOS_CONSOLE_USER
     console_password: str = NIOS_CONSOLE_PASSWORD
     log_level: str = "info"
-    log_file: str | None = None
+    log_file: str | None = None  # explicit override; unset lets output_dir auto-derive one
     output_dir: str | None = None
     logger: NiosLogger | None = field(default=None, repr=False)
 
@@ -43,7 +70,7 @@ class ApplianceConfig:
     console_user: str = NIOS_CONSOLE_USER
     console_password: str = NIOS_CONSOLE_PASSWORD
     log_level: str = "info"
-    log_file: str | None = None
+    log_file: str | None = None  # explicit override; unset lets output_dir auto-derive one
     output_dir: str | None = None
     logger: NiosLogger | None = field(default=None, repr=False)
 
@@ -65,7 +92,7 @@ class LocalApplianceConfig:
     console_user: str = NIOS_CONSOLE_USER
     console_password: str = NIOS_CONSOLE_PASSWORD
     log_level: str = "info"
-    log_file: str | None = None
+    log_file: str | None = None  # explicit override; unset lets output_dir auto-derive one
     output_dir: str | None = None
     logger: NiosLogger | None = field(default=None, repr=False)
 
@@ -92,7 +119,7 @@ class GridConfig:
     chroot: str = "/local/91/aslan_chroot"
     worktree: str | None = None
     log_level: str = "info"
-    log_file: str | None = None
+    log_file: str | None = None  # explicit override; unset lets output_dir auto-derive one
     output_dir: str | None = None
     logger: NiosLogger | None = field(default=None, repr=False)
 
@@ -114,7 +141,7 @@ class BuildConfig:
     slot: str
     chroot: str | None = None
     log_level: str = "info"
-    log_file: str | None = None
+    log_file: str | None = None  # explicit override; unset lets output_dir auto-derive one
     output_dir: str | None = None
     logger: NiosLogger | None = field(default=None, repr=False)
 

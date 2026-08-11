@@ -165,6 +165,9 @@ class NiosContainer(DeployMixin):
     def __repr__(self) -> str:
         return f"NiosContainer({self.container_name!r})"
 
+    def __str__(self) -> str:
+        return self.container_name
+
 
 class LocalNiosContainer(LocalNetworkMixin, NiosContainer):
     """Docker-exec access to NIOS running in a local NCC container.

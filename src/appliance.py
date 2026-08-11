@@ -153,7 +153,7 @@ class Appliance(_ApplianceBase):
                 child.sendline(self._console_password)
                 child.expect(r"Infoblox\s*>", timeout=10)
         except (pexpect.TIMEOUT, pexpect.EOF, Exception) as e:
-            self._logger.warning(
+            self._logger.info(
                 "Cannot connect to console on %s: %s. "
                 "Enable SSH manually, or close any open console session and retry.",
                 self._hostname, e,
@@ -178,7 +178,7 @@ class Appliance(_ApplianceBase):
             child.sendline("exit")
             child.close()
         except (pexpect.TIMEOUT, pexpect.EOF) as e:
-            self._logger.warning("Console command failed: %s", e)
+            self._logger.info("Console command failed: %s", e)
             child.close(force=True)
             return
 
@@ -189,13 +189,13 @@ class Appliance(_ApplianceBase):
         try:
             result = subprocess.run(["addkeys", ip], timeout=ADDKEYS_TIMEOUT)
             if result.returncode != 0:
-                self._logger.warning(
+                self._logger.info(
                     "addkeys %s failed (exit %d) — SSH is enabled but key push failed. "
                     "You may not be able to SSH in.",
                     ip, result.returncode,
                 )
         except subprocess.TimeoutExpired:
-            self._logger.warning(
+            self._logger.info(
                 "addkeys %s timed out after %ds — SSH is enabled but key push failed. "
                 "You may not be able to SSH in.",
                 ip, ADDKEYS_TIMEOUT,
@@ -213,6 +213,9 @@ class Appliance(_ApplianceBase):
 
     def __repr__(self) -> str:
         return f"Appliance({self._hostname!r}, container={self.container.container_name!r})"
+
+    def __str__(self) -> str:
+        return f"{self._hostname} ({self._ip})" if self._ip else self._hostname
 
 
 class LocalAppliance(_ApplianceBase):
@@ -264,3 +267,6 @@ class LocalAppliance(_ApplianceBase):
 
     def __repr__(self) -> str:
         return f"LocalAppliance(container={self.container.container_name!r}, ip={self._ip!r})"
+
+    def __str__(self) -> str:
+        return f"{self.hostname} ({self._ip})"

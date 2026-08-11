@@ -1,15 +1,31 @@
 """Unit tests for config.py dataclasses: __post_init__ defaulting logic only.
 
-No I/O, no transport, no network — these are plain dataclasses.
+No I/O, no transport, no network — these are plain dataclasses. Defaults
+is the one exception (it reads a JSON file), so its tests use tmp_path
+rather than touching the real src/config.json.
 """
+
+import json
+import os
+
+import pytest
 
 from nios_test import (
     ApplianceConfig,
     BuildConfig,
+    Defaults,
     GridConfig,
     LocalApplianceConfig,
     LocalContainerConfig,
 )
+from nios_test.src import config as config_module
+
+_EXAMPLE_CONFIG_PATH = os.path.join(os.path.dirname(config_module.__file__), "config.example.json")
+
+with open(_EXAMPLE_CONFIG_PATH) as _f:
+    # Required fields only — drop optional ones (null in the example, e.g.
+    # output_dir) so tests can add them back in explicitly where relevant.
+    _REQUIRED_FIELDS = {k: v for k, v in json.load(_f).items() if v is not None}
 
 # -- LocalContainerConfig -------------------------------------------------------
 
@@ -81,3 +97,64 @@ def test_build_config_respects_explicit_chroot():
 def test_build_config_output_dir_resolves_log_file(tmp_path):
     cfg = BuildConfig(worktree="/x", slot="balerion", output_dir=str(tmp_path))
     assert cfg.log_file == str(tmp_path / "build-balerion.log")
+
+
+# -- Defaults --------------------------------------------------------------
+
+def test_defaults_from_json_accepts_arbitrary_path(tmp_path):
+    """from_json(path) isn't limited to src/config.json — any script can
+    keep its own config.json (e.g. a ticket script pinned to a specific
+    worktree/appliance) and load it explicitly by path."""
+    config_file = tmp_path / "config.json"
+    config_file.write_text(json.dumps(_REQUIRED_FIELDS))
+
+    defaults = Defaults.from_json(str(config_file))
+
+    for field, value in _REQUIRED_FIELDS.items():
+        assert getattr(defaults, field) == value
+
+
+def test_example_config_json_is_valid():
+    """Guards against config.example.json drifting out of sync with the
+    Defaults schema (e.g. a new required field added to one but not the
+    other)."""
+    defaults = Defaults.from_json(_EXAMPLE_CONFIG_PATH)
+
+    for field in _REQUIRED_FIELDS:
+        assert getattr(defaults, field)
+    assert defaults.output_dir is None
+
+
+def test_defaults_from_json_output_dir_defaults_to_none(tmp_path):
+    config_file = tmp_path / "config.json"
+    config_file.write_text(json.dumps(_REQUIRED_FIELDS))
+
+    defaults = Defaults.from_json(str(config_file))
+
+    assert defaults.output_dir is None
+
+
+def test_defaults_from_json_respects_explicit_output_dir(tmp_path):
+    config_file = tmp_path / "config.json"
+    config_file.write_text(json.dumps({**_REQUIRED_FIELDS, "output_dir": "/tmp/results"}))
+
+    defaults = Defaults.from_json(str(config_file))
+
+    assert defaults.output_dir == "/tmp/results"
+
+
+def test_defaults_from_json_missing_file_raises(tmp_path):
+    missing = tmp_path / "config.json"
+
+    with pytest.raises(FileNotFoundError, match="config.example.json"):
+        Defaults.from_json(str(missing))
+
+
+def test_defaults_from_json_uses_colocated_config_when_no_path_given(tmp_path, monkeypatch):
+    config_file = tmp_path / "config.json"
+    config_file.write_text(json.dumps(_REQUIRED_FIELDS))
+    monkeypatch.setattr(config_module, "_DEFAULT_CONFIG_PATH", str(config_file))
+
+    defaults = Defaults.from_json()
+
+    assert defaults.hostname == "vm-04-89"

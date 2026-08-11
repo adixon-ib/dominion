@@ -285,7 +285,7 @@ class DeployMixin:
                 found.append((local_path, dest))
             else:
                 skipped.append(local_path)
-                self._logger.warning("Skipping missing file: %s", local_path)
+                self._logger.info("Skipping missing file: %s", local_path)
         manifest = found
 
         if not manifest:
