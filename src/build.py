@@ -19,12 +19,12 @@ from .config import BuildConfig
 from .log import create_logger
 
 if TYPE_CHECKING:
-    import logging
+    from .log import NiosLogger
 
 
 class NiosBuild:
 
-    def __init__(self, config: BuildConfig, logger: logging.Logger):
+    def __init__(self, config: BuildConfig, logger: NiosLogger):
         self._config = config
         self._logger = logger
 
@@ -37,17 +37,12 @@ class NiosBuild:
         )
         return cls(config, logger)
 
-    def quick(self) -> None:
-        """Incremental build: touch skip_slow && make install."""
-        self._run("touch skip_slow && make install")
-
-    def full(self) -> None:
-        """Full rebuild from scratch: installclean + build-env + install."""
-        self._run("make installclean && make build-env && make install")
-
-    def clean(self) -> None:
-        """Wipe the chroot only: make installclean."""
-        self._run("make installclean")
+    def _is_container_running(self) -> bool:
+        proc = subprocess.run(
+            ["docker", "inspect", "-f", "{{.State.Running}}", self._config.slot],
+            capture_output=True, text=True, check=False,
+        )
+        return proc.stdout.strip().lower() == "true"
 
     def _run(self, make_cmds: str) -> None:
         if not os.path.isdir(self._config.worktree):
@@ -81,12 +76,17 @@ class NiosBuild:
                 f"Build failed (exit {proc.returncode}): {make_cmds}"
             )
 
-    def _is_container_running(self) -> bool:
-        proc = subprocess.run(
-            ["docker", "inspect", "-f", "{{.State.Running}}", self._config.slot],
-            capture_output=True, text=True, check=False,
-        )
-        return proc.stdout.strip().lower() == "true"
+    def quick(self) -> None:
+        """Incremental build"""
+        self._run("touch skip_slow && make install")
+
+    def full(self) -> None:
+        """Full rebuild from scratch"""
+        self._run("make installclean && make build-env && make install")
+
+    def clean(self) -> None:
+        """Wipe the chroot"""
+        self._run("make installclean")
 
     def __repr__(self) -> str:
         return f"NiosBuild(slot={self._config.slot!r}, worktree={self._config.worktree!r})"

@@ -10,7 +10,7 @@ from .config import ApplianceConfig, GridConfig
 from .log import create_logger
 
 if TYPE_CHECKING:
-    import logging
+    from .log import NiosLogger
 
 GRID_DEPLOY = "/blox/adixon1/scripts/lab/grid_deploy"
 
@@ -22,7 +22,7 @@ class Grid:
         gm: Appliance | None,
         members: list[Appliance],
         topology: str,
-        logger: logging.Logger,
+        logger: NiosLogger,
         setup_dir: str | None = None,
         tag: str | None = None,
     ):
@@ -165,7 +165,7 @@ def _make_appliance(
     hostname: str,
     ip: str,
     config: GridConfig,
-    logger: logging.Logger,
+    logger: NiosLogger,
 ) -> Appliance:
     cfg = ApplianceConfig(
         hostname=hostname,
