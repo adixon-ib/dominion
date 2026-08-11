@@ -1,15 +1,29 @@
+"""Interactive, prompt-driven sessions over pexpect: ShellSession (docker exec
+bash) and ConsoleSession (serial console / SSH login).
+
+Use these when you need to hold a session open across multiple commands
+and react to prompts inline.
+
+For one-shot commands with a return code, use transport.py instead."""
+
 from __future__ import annotations
 
-import logging
 import re
-from typing import Union
+from typing import TYPE_CHECKING, Union
 
 import pexpect
+from typing_extensions import override
 
 from .constants import NIOS_CONSOLE_USER, NIOS_CONSOLE_PASSWORD
+from .log import create_logger
 
-log = logging.getLogger(__name__)
+if TYPE_CHECKING:
+    from .log import NiosLogger
 
+log = create_logger(name=__name__)
+
+# Match ANSI escape codes (colors, formatting) for removal from terminal output
+# to keep logs readable
 _ANSI_RE = re.compile(r"\x1b\[\??[0-9;]*[a-zA-Z]")
 
 
@@ -19,9 +33,11 @@ class BaseSession:
         self,
         spawn_cmd: str,
         prompt_pattern: str,
-        logger: logging.Logger | None = None,
+        logger: NiosLogger | None = None,
         timeout: float = 30,
     ):
+        if type(self) is BaseSession:
+            raise TypeError("BaseSession is abstract. Use ShellSession or ConsoleSession")
         self._spawn_cmd = spawn_cmd
         self._prompt_pattern = prompt_pattern
         self._logger = logger or log
@@ -30,14 +46,19 @@ class BaseSession:
         self._last_prompt: str = ""
 
     def __enter__(self):
-        self.open()
+        self._open()
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        self.close()
+        self._close()
         return False
 
-    def open(self) -> None:
+    def _open(self) -> None:
+        """Spawn the child process and wait for its first prompt.
+
+        Internal — sessions are opened via the `with` statement, or by
+        Container/Appliance's session factories.
+        """
         self._logger.debug("Opening session: %s", self._spawn_cmd)
         self._child = pexpect.spawn(
             self._spawn_cmd,
@@ -49,7 +70,13 @@ class BaseSession:
         self._last_prompt = _ANSI_RE.sub("", self._child.after or "").strip()
         self._logger.debug("Session ready")
 
-    def close(self) -> None:
+    def _close(self) -> None:
+        """Try to exit the child process cleanly, then force-kill it.
+
+        Internal — sessions are closed via the `with` statement, or by
+        Container/Appliance's session factories. Safe to call even if the
+        session is already closed or the process already died.
+        """
         if self._child and self._child.isalive():
             self._logger.debug("Closing session")
             try:
@@ -61,20 +88,20 @@ class BaseSession:
                 self._child.close(force=True)
         self._child = None
 
-    @property
-    def is_open(self) -> bool:
-        return self._child is not None and self._child.isalive()
-
-    def send(self, text: str) -> None:
-        if self._child is None:
-            raise RuntimeError("Session is not open")
-        self._logger.info(">>> %s", text.rstrip("\r\n"))
-        self._child.send(text)
-
     def sendline(self, text: str) -> None:
+        """Write text plus a newline; doesn't wait for a response.
+
+        Pair with expect()/expect_one_of() to wait for a specific prompt
+        afterward — for interactive, multi-step flows like a setup
+        or CLI wizard (`set network` for example).
+
+        Raises:
+            RuntimeError: If the session is not open.
+        """
         if self._child is None:
             raise RuntimeError("Session is not open")
         self._logger.info("%s %s", self._last_prompt or ">>>", text)
+        # Delegates to pexpect.spawn's own sendline(), which writes to the pty.
         self._child.sendline(text)
 
     def expect(
@@ -82,6 +109,20 @@ class BaseSession:
         pattern: Union[str, list[str]],
         timeout: float | None = None,
     ) -> str:
+        """Block until pattern appears in the session's output.
+
+        Use this for interactive, multi-step flows (e.g. a CLI wizard) where
+        you need to wait for a specific prompt before sending the next
+        input. run() only waits for the session's own shell prompt, not
+        arbitrary text.
+
+        Returns:
+            Everything received up to and including the match.
+
+        Raises:
+            TimeoutError: If pattern doesn't appear in time.
+            RuntimeError: If the process exits unexpectedly.
+        """
         if self._child is None:
             raise RuntimeError("Session is not open")
         timeout = int(timeout or self._default_timeout)
@@ -105,6 +146,21 @@ class BaseSession:
         return output
 
     def expect_one_of(self, patterns: list[str], timeout: float | None = None) -> int:
+        """Wait for any one of several possible prompts.
+
+        Use this when an interactive session can branch. For example a CLI
+        wizard whose next question depends on system state, like
+        `set network` asking about DSCP, IPv6, or grid membership depending
+        on the build.
+
+        Returns:
+            The index into patterns of whichever one matched. Compare
+            against it to decide which branch to follow.
+
+        Raises:
+            TimeoutError: If none of the patterns appear in time.
+            RuntimeError: If the process exits unexpectedly.
+        """
         if self._child is None:
             raise RuntimeError("Session is not open")
         timeout = int(timeout or self._default_timeout)
@@ -131,6 +187,17 @@ class BaseSession:
         return text.strip()
 
     def run(self, cmd: str, timeout: float | None = None) -> str:
+        """Run cmd and return its output.
+
+        For a single command that goes straight back to the prompt with no
+        follow-up questions, like "show status".
+
+        Args:
+            timeout: Defaults to the session's default timeout if None.
+
+        Returns:
+            The command's output, with the echoed command line stripped.
+        """
         self.sendline(cmd)
         self.expect(self._prompt_pattern, timeout=timeout)
         text = self._child.before or ""
@@ -138,18 +205,13 @@ class BaseSession:
         lines = text.split("\n")
         if lines and cmd in lines[0]:
             lines = lines[1:]
+
         result = "\n".join(lines).strip()
         if result:
             self._logger.info("%s", result)
         if self._last_prompt:
             self._logger.info("%s", self._last_prompt)
         return result
-
-    @property
-    def match_index(self) -> int | None:
-        if self._child is None:
-            return None
-        return self._child.match_index if hasattr(self._child, "match_index") else None
 
 
 class ShellSession(BaseSession):
@@ -158,24 +220,16 @@ class ShellSession(BaseSession):
 
     def __init__(
         self,
-        container_name: str,
-        transport_cmd_prefix: str = "",
-        logger: logging.Logger | None = None,
+        spawn_cmd: str,
+        logger: NiosLogger | None = None,
         timeout: float = 30,
     ):
-        if transport_cmd_prefix:
-            tty_prefix = transport_cmd_prefix.replace("ssh ", "ssh -tt ", 1)
-            spawn_cmd = f"{tty_prefix} docker exec -it {container_name} /bin/bash"
-        else:
-            spawn_cmd = f"docker exec -it {container_name} /bin/bash"
-
         super().__init__(
             spawn_cmd=spawn_cmd,
             prompt_pattern=self.PROMPT_PATTERN,
             logger=logger,
             timeout=timeout,
         )
-        self._container_name = container_name
 
 
 class ConsoleSession(BaseSession):
@@ -186,37 +240,14 @@ class ConsoleSession(BaseSession):
 
     def __init__(
         self,
-        container_name: str | None = None,
-        host: str | None = None,
-        port: int = 22,
+        spawn_cmd: str,
         user: str = NIOS_CONSOLE_USER,
         password: str = NIOS_CONSOLE_PASSWORD,
-        local: bool = False,
-        transport_cmd_prefix: str = "",
-        logger: logging.Logger | None = None,
+        logger: NiosLogger | None = None,
         timeout: float = 60,
     ):
         self._user = user
         self._password = password
-
-        if local or container_name:
-            if transport_cmd_prefix:
-                tty_prefix = transport_cmd_prefix.replace("ssh ", "ssh -tt ", 1)
-                spawn_cmd = (
-                    f"{tty_prefix} "
-                    f"docker exec -it {container_name} "
-                    f"/infoblox/one/bin/serial_console"
-                )
-            else:
-                spawn_cmd = (
-                    f"docker exec -it {container_name} "
-                    f"/infoblox/one/bin/serial_console"
-                )
-        else:
-            spawn_cmd = (
-                f"ssh -o StrictHostKeyChecking=no -p {port} "
-                f"{user}@{host}"
-            )
 
         super().__init__(
             spawn_cmd=spawn_cmd,
@@ -225,7 +256,17 @@ class ConsoleSession(BaseSession):
             timeout=timeout,
         )
 
-    def open(self) -> None:
+    @override
+    def _open(self) -> None:
+        """Spawn the console and authenticate only if prompted.
+
+        Internal — sessions are opened via the `with` statement, or by
+        Container/Appliance's session factories. Handles three cases
+        depending on connection type and state: a full login prompt (serial
+        console), a password-only prompt (SSH, since the username is
+        already in the connection string), or already sitting at the
+        Infoblox> prompt with no auth needed.
+        """
         self._logger.debug("Opening console session: %s", self._spawn_cmd)
         self._child = pexpect.spawn(
             self._spawn_cmd,
