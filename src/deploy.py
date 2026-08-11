@@ -1,14 +1,11 @@
 from __future__ import annotations
 
 import hashlib
-import logging
 import os
 import shutil
 import tempfile
 import time
 from dataclasses import dataclass, field
-
-log = logging.getLogger(__name__)
 
 
 class DeployError(RuntimeError):
@@ -174,7 +171,7 @@ class DeployMixin:
         if changed:
             self._transport.run_on_host("killall serial_console 2>/dev/null || true", check=False)
             restarted = True
-            log.info("serial_console killed — process_manager will respawn")
+            self._logger.info("serial_console killed — process_manager will respawn")
 
         return DeployResult(
             artifact="serial_console",
@@ -227,7 +224,7 @@ class DeployMixin:
         if changed and restart_target:
             self._transport.run_on_host(f"killall {restart_target} 2>/dev/null || true", check=False)
             restarted = True
-            log.info("%s killed — will respawn with new %s", restart_target, os.path.basename(dest))
+            self._logger.info("%s killed — will respawn with new %s", restart_target, os.path.basename(dest))
 
         return DeployResult(
             artifact=os.path.basename(dest),
@@ -288,7 +285,7 @@ class DeployMixin:
                 found.append((local_path, dest))
             else:
                 skipped.append(local_path)
-                log.warning("Skipping missing file: %s", local_path)
+                self._logger.warning("Skipping missing file: %s", local_path)
         manifest = found
 
         if not manifest:
@@ -327,7 +324,7 @@ class DeployMixin:
                 check=False,
             )
             restarted = True
-            log.info("admin-httpd restarted")
+            self._logger.info("admin-httpd restarted")
 
         return DeployResult(
             artifact="token_py",
@@ -401,7 +398,7 @@ class DeployMixin:
                 raise DeployError(f"Consumer PID {pid} is not alive", artifact="token_stats_consumer")
 
             restarted = True
-            log.info("token_stats_consumer restarted (PID %s)", pid)
+            self._logger.info("token_stats_consumer restarted (PID %s)", pid)
 
         return DeployResult(
             artifact="token_stats_consumer",
