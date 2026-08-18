@@ -1,0 +1,28 @@
+#!/bin/bash
+## dump_token_stats <ip> — SSH to NIOS appliance and decrypt/dump token stats as JSON
+#
+# Usage:
+#   dump_token_stats.sh <ip_address>
+#
+# Connects via SSH to the given NIOS appliance and uses one_token
+# to decrypt and pretty-print the token stats file.
+
+set -euo pipefail
+
+IP="${1:-${NIOS_IP:-}}"
+if [[ -z "$IP" ]]; then
+    echo "Usage: $(basename "$0") <ip_address>  (or set NIOS_IP)"
+    exit 1
+fi
+
+ssh root@"$IP" "python3 -c \"
+import sys, json
+sys.path.insert(0, '/infoblox/one/lib/python')
+from infoblox.one import one_token
+
+fke = one_token.get_fke()
+
+with open(one_token.STATS_FILE, 'rb') as f:
+    stats = one_token.decrypt_token_data(fke, f.read())
+print(json.dumps(stats, indent=2))
+\""

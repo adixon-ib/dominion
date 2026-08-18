@@ -5,7 +5,8 @@ results/
 src/config.json
 src/graphify-out/
 graphify-out/
-.claude/
+.claude/*
+!.claude/skills/
 .ruff_cache/
 .pytest_cache/
 HANDOFF.md
