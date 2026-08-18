@@ -24,7 +24,7 @@ from _common import container_from_args
 
 from nios_test import LocalNiosContainer
 
-DEFAULT_RESULTS_ROOT = "/blox/adixon1/ncc-results"
+DEFAULT_RESULTS_ROOT = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "results", "ncc")
 SUMMARY_LOG = os.path.join(DEFAULT_RESULTS_ROOT, "summary.log")
 TEST_CLASSES = {
     "member_ipc": "infoblox.test.one.wapi.test_member_token.WapiMemberIpc215",

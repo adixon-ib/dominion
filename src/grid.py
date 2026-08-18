@@ -12,7 +12,7 @@ from .log import create_logger
 if TYPE_CHECKING:
     from .log import NiosLogger
 
-GRID_DEPLOY = "/blox/adixon1/scripts/lab/grid_deploy"
+GRID_DEPLOY = os.path.join(os.path.dirname(os.path.dirname(__file__)), "tools", "grid_deploy")
 
 
 class Grid:

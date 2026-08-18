@@ -16,7 +16,7 @@ _DEFAULT_CONFIG_PATH = os.path.join(os.path.dirname(__file__), "config.json")
 
 DEFAULT_CHROOT_PATH = "/local/91/aslan_chroot"
 DEFAULT_LOG_LEVEL = "info"
-DEFAULT_RESULTS_DIR = "/blox/adixon1/scripts/nios_test/results"
+DEFAULT_RESULTS_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "results")
 
 
 @dataclass

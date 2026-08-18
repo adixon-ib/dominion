@@ -1,0 +1,775 @@
+#!/bin/bash
+## grid_deploy [subcommand] [flags] — Interactive config_grid deployment launcher
+#
+# Usage:
+#   grid_deploy                                          # Interactive menu
+#   grid_deploy standalone      --member H --file F
+#   grid_deploy gm-sa           --gm H --member H --file F
+#   grid_deploy gm-sa-physical  --gm H --member H --ova F [--bin F]
+#   grid_deploy ha-gm           --gm H:H --file F
+#   grid_deploy ha-gm-ha-mem    --gm H --ha H:H --file F
+#   grid_deploy crazy-grid      --gm H:H --ha H:H --member H --ova F --bin F
+#
+# Subcommands (simple → complex):
+#
+#   ── Standalone ──
+#   standalone        — 1 appliance using lab-assigned IPs (from get_lab_info)
+#   gm-sa             — 2 appliances: GM + 1 SA member (both virtual or both physical)
+#   gm-sa-physical    — 2 appliances: GM (virtual) + 1 SA member (physical)
+#
+#   ── HA ──
+#   ha-gm             — 2 appliances: GM HA pair (both virtual or both physical)
+#   ha-gm-ha-mem      — 3 appliances: GM + HA member pair (all virtual or all physical)
+#   crazy-grid        — 5 appliances: GM HA pair + HA member pair (virtual) + 1 member (physical)
+#
+# Flags:
+#   --gm HOST[:HOST]   GM host (colon-separated pair for HA)
+#   --ha HOST:HOST     HA member pair (colon-separated)
+#   --member HOST      Member/physical host
+#   --ova FILENAME     OVA image filename (virtual)
+#   --bin FILENAME     BIN image filename (physical)
+#   --file FILENAME    Image filename (when all hosts are same type)
+#   --max-retries N    Max IP allocation attempts for HA (default: 5)
+#   --skip-check       Skip HA IP conflict check (old behavior)
+#   --ipv4-only        Configure IPv4 only (passes -A 4 to config_grid)
+#   --setup-dir DIR    Pool directory for config_grid -P (default: /tmp/my_setup)
+#   --tag TAG          Tag ID for config_grid -T (default: mygrid)
+#
+# HA deployments use a two-phase approach:
+#   1. config_grid -X — allocates IPs but does NOT install NIOS
+#   2. Ping-checks each allocated HA IP for conflicts
+#   3. If conflict found, releases resources and retries with new IPs
+#   4. Once all IPs are free, runs reset_grid to install
+#
+# All deployments wipe --setup-dir (default /tmp/my_setup) before running
+# config_grid. Pass distinct --setup-dir/--tag values to run multiple
+# grid_deploy invocations concurrently without colliding.
+# Filenames are looked up automatically — just pass the filename, not a path.
+
+set -euo pipefail
+
+CONFIG_GRID="/import/tools/qa/bin/config_grid"
+RESET_GRID="/import/tools/qa/bin/reset_grid"
+RELEASE_SYSTEM="/import/tools/qa/bin/release_test_system"
+SETUP_DIR="/tmp/my_setup"
+TAG="mygrid"
+CLI_MODE=false
+MAX_RETRIES=10
+SKIP_IP_CHECK=false
+IPV4_ONLY=false
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# HELPER FUNCTIONS
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# Prompt for a required value (loops until non-empty)
+prompt_input() {
+    local label="$1"
+    local var_name="$2"
+    local value=""
+
+    while [[ -z "$value" ]]; do
+        read -rp "  $label: " value
+        if [[ -z "$value" ]]; then
+            echo "  ERROR: Value is required."
+        fi
+    done
+
+    eval "$var_name=\"$value\""
+}
+
+# Prompt for an optional value (empty string accepted)
+# Usage: prompt_input_optional "Label" var_name ["default"]
+prompt_input_optional() {
+    local label="$1"
+    local var_name="$2"
+    local default="${3:-}"
+    local value=""
+
+    if [[ -n "$default" ]]; then
+        read -rp "  $label (default: $default, Enter to skip): " value
+    else
+        read -rp "  $label (Enter to skip): " value
+    fi
+    eval "$var_name=\"$value\""
+}
+
+# Prompt for an HA pair — returns colon-separated "active:passive"
+prompt_ha_pair() {
+    local label="$1"
+    local var_name="$2"
+    local active="" passive=""
+
+    echo "  $label:"
+    prompt_input "    Active host" active
+    prompt_input "    Passive host" passive
+
+    eval "$var_name=\"$active:$passive\""
+}
+
+# Print deployment summary and prompt for confirmation
+# Usage: confirm_proceed "type_label" "description" "Key1" "Val1" "Key2" "Val2" ...
+confirm_proceed() {
+    local type_label="$1"
+    local description="$2"
+    shift 2
+
+    echo ""
+    echo "  ┌─────────────────────────────────────────────────────────┐"
+    echo "  │               Deployment Summary                        │"
+    echo "  └─────────────────────────────────────────────────────────┘"
+    echo ""
+    printf "  %-16s %s\n" "Type:" "$type_label ($description)"
+
+    while [[ $# -ge 2 ]]; do
+        printf "  %-16s %s\n" "$1:" "$2"
+        shift 2
+    done
+
+    echo ""
+    if [[ "$type_label" == "standalone" ]]; then
+        echo "  ✓ Deterministic deployment: using lab-assigned IPs from get_lab_info."
+        echo "     No random IP allocation will occur."
+    else
+        echo "  ⚠  WARNING: This deployment is non-deterministic."
+        echo "     • IP conflicts may occur — you may need to run multiple times"
+        echo "     • Run 'show network' on members to verify IPs after deployment"
+        echo "     • Gateway may change — restore with netctl_system:"
+        echo "       netctl_system -H <host> -S <subnet> -a vlanset -i lan"
+    fi
+    echo ""
+
+    if [[ "$CLI_MODE" == true ]]; then
+        return
+    fi
+
+    local answer=""
+    read -rp "  Proceed? [y/N]: " answer
+    if [[ ! "$answer" =~ ^[yY]$ ]]; then
+        echo "  Aborted."
+        exit 0
+    fi
+}
+
+# Print post-execution warning with per-host netctl_system examples
+# Usage: post_run_warning host1 host2 ...
+post_run_warning() {
+    echo ""
+    echo "  ⚠  REMINDER: Deployment may need verification."
+    echo "     • Check 'show network' on each member for IP conflicts"
+    echo "     • If gateway changed, restore VLAN with:"
+    for host in "$@"; do
+        [[ -n "$host" ]] && echo "       netctl_system -H $host -S <subnet> -a vlanset -i lan"
+    done
+    echo "     • If issues persist, re-run this deployment"
+    echo ""
+}
+
+# Extract HA VIP/HA IPs from the tag file written by config_grid -X
+# Prints space-separated IPs: SHARED_IP HA_1_IP HA_2_IP [...]
+# Tag file uses XML attribute format: SHARED_IP="10.35.20.6" HA_1_IP="10.35.20.7" ...
+extract_ha_ips() {
+    local tag_file="$SETUP_DIR/$TAG.xml"
+    if [[ ! -f "$tag_file" ]]; then
+        echo ""
+        return 1
+    fi
+    grep -oP '(SHARED_IP|HA_1_IP|HA_2_IP)="[^"]+"' "$tag_file" \
+        | grep -oP '"[^"]+"' \
+        | tr -d '"' \
+        | sort -u \
+        | tr '\n' ' ' || true
+}
+
+# Ping-check a list of IPs. Returns 0 if ALL are free, 1 if any respond.
+# Usage: check_ips_free ip1 ip2 ip3 ...
+check_ips_free() {
+    local failed=0
+    for ip in "$@"; do
+        [[ -z "$ip" ]] && continue
+        if ping -c 1 -W 2 "$ip" &>/dev/null; then
+            echo "  ✗ CONFLICT: $ip is already in use (responds to ping)"
+            failed=1
+        else
+            echo "  ✓ OK: $ip is free"
+        fi
+    done
+    return $failed
+}
+
+# Release all VIPs and VRIDs from the current tag file, then remove setup dir.
+release_grid_resources() {
+    local tag_file="$SETUP_DIR/$TAG.xml"
+    if [[ ! -f "$tag_file" ]]; then
+        return
+    fi
+
+    local leased_vips leased_vrids
+    leased_vips=$(grep -oP 'LEASED_VIP="[^"]+"' "$tag_file" | grep -oP '"[^"]+"' | tr -d '"' || true)
+    leased_vrids=$(grep -oP 'LEASED_VRID="[^"]+"' "$tag_file" | grep -oP '"[^"]+"' | tr -d '"' || true)
+
+    if [[ -n "$leased_vips" ]]; then
+        IFS=':' read -ra vips <<< "$leased_vips"
+        for vip in "${vips[@]}"; do
+            [[ -n "$vip" ]] && echo "  Releasing VIP $vip" && "$RELEASE_SYSTEM" -V "$vip" 2>/dev/null || true
+        done
+    fi
+
+    if [[ -n "$leased_vrids" ]]; then
+        IFS=':' read -ra vrids <<< "$leased_vrids"
+        for vrid in "${vrids[@]}"; do
+            [[ -n "$vrid" ]] && echo "  Releasing VRID $vrid" && "$RELEASE_SYSTEM" -R "$vrid" 2>/dev/null || true
+        done
+    fi
+
+    rm -rf "$SETUP_DIR"
+}
+
+# Run config_grid with -X, check allocated HA IPs, retry if conflicts found.
+# On success, continues with reset_grid to actually install.
+# Usage: ha_deploy_with_check config_grid_args...
+ha_deploy_with_check() {
+    local -a cg_args=("$@")
+    local attempt=0
+
+    local -a addr_args=()
+    if [[ "$IPV4_ONLY" == true ]]; then addr_args+=(-A 4); fi
+
+    if [[ "$SKIP_IP_CHECK" == true ]]; then
+        echo "  Removing previous setup..."
+        rm -rf "$SETUP_DIR"
+        echo "  Running config_grid (skip-check mode)..."
+        "$CONFIG_GRID" -P "$SETUP_DIR" -T "$TAG" "${addr_args[@]}" "${cg_args[@]}"
+        return $?
+    fi
+
+    while (( attempt < MAX_RETRIES )); do
+        attempt=$((attempt + 1))
+        echo ""
+        echo "  ── Attempt $attempt/$MAX_RETRIES ──"
+        echo "  Removing previous setup..."
+        rm -rf "$SETUP_DIR"
+
+        echo "  Running config_grid -X (allocate IPs only, no install)..."
+        "$CONFIG_GRID" -P "$SETUP_DIR" -T "$TAG" -X "${addr_args[@]}" "${cg_args[@]}"
+
+        echo ""
+        echo "  Checking allocated HA IPs for conflicts..."
+        local ips
+        ips=$(extract_ha_ips)
+        if [[ -z "$ips" ]]; then
+            echo "  WARNING: Could not extract IPs from tag file. Proceeding anyway."
+            echo "  Running reset_grid to install..."
+            "$RESET_GRID" -P "$SETUP_DIR" -T "$TAG" -U
+            return $?
+        fi
+
+        # shellcheck disable=SC2086
+        if check_ips_free $ips; then
+            echo ""
+            echo "  All HA IPs are free. Proceeding with install..."
+            "$RESET_GRID" -P "$SETUP_DIR" -T "$TAG" -U
+            return $?
+        else
+            echo ""
+            echo "  IP conflict detected. Releasing resources and retrying..."
+            release_grid_resources
+            if (( attempt < MAX_RETRIES )); then
+                echo "  Waiting 5s before retry..."
+                sleep 5
+            fi
+        fi
+    done
+
+    echo ""
+    echo "  ERROR: Failed to get conflict-free IPs after $MAX_RETRIES attempts."
+    echo "  Try again later or use --skip-check to bypass."
+    return 1
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# DEPLOYMENT FUNCTIONS
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# ── Standalone ────────────────────────────────────────────────────────────────
+
+deploy_standalone() {
+    local host="$1"
+    local file="$2"
+
+    # Query get_lab_info to show the user what IPs will be used
+    echo "  Querying get_lab_info for $host..."
+    local lab_info
+    lab_info=$(get_lab_info -H "$host" 2>&1) || {
+        echo "  ERROR: get_lab_info -H $host failed:"
+        echo "$lab_info"
+        exit 1
+    }
+
+    local lan_ip lan_router lan_netmask
+    lan_ip=$(echo "$lab_info" | grep '^LAN_IPADDR=' | cut -d= -f2)
+    lan_router=$(echo "$lab_info" | grep '^LAN_ROUTER=' | cut -d= -f2)
+    lan_netmask=$(echo "$lab_info" | grep '^LAN_NETMASK=' | cut -d= -f2)
+
+    confirm_proceed "standalone" "1 appliance, lab-assigned IPs" \
+        "Host"         "$host" \
+        "Image"        "$file" \
+        "LAN IP"       "$lan_ip (mask $lan_netmask, gw $lan_router)" \
+        "Network"      "public (lab-assigned from get_lab_info)"
+
+    echo "  Removing previous setup..."
+    rm -rf "$SETUP_DIR"
+    echo "  Running config_grid (standalone, public network)..."
+
+    if [[ "$IPV4_ONLY" == true ]]; then
+        "$CONFIG_GRID" -P "$SETUP_DIR" -T "$TAG" -A 4 \
+            "$host" -F "$file"
+    else
+        "$CONFIG_GRID" -P "$SETUP_DIR" -T "$TAG" \
+            "$host" -F "$file"
+    fi
+
+    echo ""
+    echo "  ✓ Deployment complete. IPs used from get_lab_info:"
+    echo "    LAN:  $lan_ip ($lan_netmask / $lan_router)"
+    echo ""
+}
+
+deploy_gm_sa() {
+    local gm="$1"
+    local member="$2"
+    local file="$3"
+
+    confirm_proceed "gm-sa" "GM + 1 SA member" \
+        "GM"           "$gm" \
+        "Member"       "$member" \
+        "Image"        "$file"
+
+    echo "  Removing previous setup..."
+    rm -rf "$SETUP_DIR"
+    echo "  Running config_grid (gm-sa)..."
+
+    if [[ "$IPV4_ONLY" == true ]]; then
+        "$CONFIG_GRID" -P "$SETUP_DIR" -T "$TAG" -A 4 \
+            "$gm" -F "$file" \
+            -S "$member -F $file"
+    else
+        "$CONFIG_GRID" -P "$SETUP_DIR" -T "$TAG" \
+            "$gm" -F "$file" \
+            #-N 256 -M YES \
+            -S "$member -F $file"
+    fi
+
+    post_run_warning "$gm" "$member"
+}
+
+deploy_gm_sa_physical() {
+    local gm="$1"
+    local member="$2"
+    local ova="$3"
+    local bin="${4:-}"
+
+    local member_file="${bin:-$ova}"
+    local summary_args=("GM" "$gm" "Member" "$member" "OVA" "$ova")
+    if [[ -n "$bin" ]]; then
+        summary_args+=("BIN" "$bin")
+    fi
+
+    confirm_proceed "gm-sa-physical" "GM (virtual) + 1 SA member (physical)" \
+        "${summary_args[@]}"
+
+    echo "  Removing previous setup..."
+    rm -rf "$SETUP_DIR"
+    echo "  Running config_grid (gm-sa-physical)..."
+
+    if [[ "$IPV4_ONLY" == true ]]; then
+        "$CONFIG_GRID" -P "$SETUP_DIR" -T "$TAG" -A 4 \
+            "$gm" -F "$ova" \
+            -S "$member -F $member_file" \
+            -t yes
+    else
+        "$CONFIG_GRID" -P "$SETUP_DIR" -T "$TAG" \
+            "$gm" -F "$ova" \
+            #-N 256 -M YES \
+            -S "$member -F $member_file" \
+            -t yes
+    fi
+
+    post_run_warning "$gm" "$member"
+}
+
+# ── HA ────────────────────────────────────────────────────────────────────────
+
+deploy_ha_gm() {
+    local gm_pair="$1"   # active:passive
+    local file="$2"
+
+    local gm_active="${gm_pair%%:*}"
+    local gm_passive="${gm_pair##*:}"
+
+    confirm_proceed "ha-gm" "GM HA pair (with IP conflict check)" \
+        "GM Active"    "$gm_active" \
+        "GM Passive"   "$gm_passive" \
+        "Image"        "$file" \
+        "Max retries"  "$MAX_RETRIES" \
+        "IP check"     "$(if [[ $SKIP_IP_CHECK == true ]]; then echo disabled; else echo enabled; fi)"
+
+    ha_deploy_with_check "$gm_active:$gm_passive" -F "$file"
+
+    post_run_warning "$gm_active" "$gm_passive"
+}
+
+deploy_ha_gm_ha_mem() {
+    local gm="$1"
+    local ha_pair="$2"   # active:passive
+    local file="$3"
+
+    local ha_active="${ha_pair%%:*}"
+    local ha_passive="${ha_pair##*:}"
+
+    confirm_proceed "ha-gm-ha-mem" "GM + HA member pair (with IP conflict check)" \
+        "GM"           "$gm" \
+        "HA Active"    "$ha_active" \
+        "HA Passive"   "$ha_passive" \
+        "Image"        "$file" \
+        "Max retries"  "$MAX_RETRIES" \
+        "IP check"     "$(if [[ $SKIP_IP_CHECK == true ]]; then echo disabled; else echo enabled; fi)"
+
+    ha_deploy_with_check \
+        "$gm" -F "$file" \
+        -H "$ha_active:$ha_passive -F $file"
+
+    post_run_warning "$gm" "$ha_active" "$ha_passive"
+}
+
+deploy_crazy_grid() {
+    local gm_pair="$1"   # active:passive
+    local ha_pair="$2"   # active:passive
+    local member="$3"
+    local ova="$4"
+    local bin="$5"
+
+    local gm_active="${gm_pair%%:*}"
+    local gm_passive="${gm_pair##*:}"
+    local ha_active="${ha_pair%%:*}"
+    local ha_passive="${ha_pair##*:}"
+
+    confirm_proceed "crazy-grid" "GM HA + HA members (virtual) + physical member (with IP conflict check)" \
+        "GM Active"    "$gm_active" \
+        "GM Passive"   "$gm_passive" \
+        "HA Active"    "$ha_active" \
+        "HA Passive"   "$ha_passive" \
+        "Member"       "$member" \
+        "OVA"          "$ova" \
+        "BIN"          "$bin" \
+        "Max retries"  "$MAX_RETRIES" \
+        "IP check"     "$(if [[ $SKIP_IP_CHECK == true ]]; then echo disabled; else echo enabled; fi)"
+
+    ha_deploy_with_check \
+        "$gm_active:$gm_passive" -F "$ova" \
+        -H "$ha_active:$ha_passive -F $ova" \
+        -S "$member -F $bin"
+
+    post_run_warning "$gm_active" "$gm_passive" "$ha_active" "$ha_passive" "$member"
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# INTERACTIVE MENU
+# ═══════════════════════════════════════════════════════════════════════════════
+
+show_menu() {
+    echo ""
+    echo "╔══════════════════════════════════════════════════════════════╗"
+    echo "║              Grid Deployment Launcher                        ║"
+    echo "╚══════════════════════════════════════════════════════════════╝"
+    echo ""
+    echo "  ── Standalone ──"
+    echo "  1) standalone        — 1 appliance, lab-assigned IPs (from get_lab_info)"
+    echo "  2) gm-sa             — 2 appliances: GM + 1 SA member (both virtual or both physical)"
+    echo "  3) gm-sa-physical    — 2 appliances: GM (virtual) + 1 SA member (physical)"
+    echo ""
+    echo "  ── HA ──"
+    echo "  4) ha-gm             — 2 appliances: GM HA pair (both virtual or both physical)"
+    echo "  5) ha-gm-ha-mem      — 3 appliances: GM + HA member pair (all virtual or all physical)"
+    echo "  6) crazy-grid        — 5 appliances: GM HA pair + HA member pair (virtual) + 1 member (physical)"
+    echo ""
+    echo "  q) Quit"
+    echo ""
+}
+
+interactive_mode() {
+    show_menu
+    read -rp "  Select deployment [1-6]: " choice
+
+    case "$choice" in
+        1)
+            echo ""
+            echo "  standalone — 1 appliance, lab-assigned IPs"
+            echo "  Uses the host's pre-assigned IPs from get_lab_info (public network)."
+            echo "  No random IP allocation — deterministic deployment."
+            echo "  You will need to provide:"
+            echo "    1. Host           (e.g. vm-02-89 or eng-lab-123)"
+            echo "    2. Image filename (e.g. nios-8.7.0.ova or nios-8.7.0.bin)"
+            echo "  Optional:"
+            echo "    • IPv4 only       (default: N, y to skip IPv6)"
+            echo ""
+            prompt_input "Host" member_host
+            prompt_input "Image filename" image_file
+            prompt_input_optional "IPv4 only? [y/N]" ipv4_ans "N"
+            if [[ "$ipv4_ans" =~ ^[yY]$ ]]; then IPV4_ONLY=true; fi
+            deploy_standalone "$member_host" "$image_file"
+            ;;
+        2)
+            echo ""
+            echo "  gm-sa — GM + 1 SA member (both virtual or both physical)"
+            echo "  Both hosts must be virtual (vm-*) or both physical (eng-*)."
+            echo "  The same image file is used for both."
+            echo "  You will need to provide:"
+            echo "    1. GM host        (e.g. vm-02-89 or eng-lab-123)"
+            echo "    2. Member host    (e.g. vm-03-89 or eng-lab-456)"
+            echo "    3. Image filename (e.g. nios-8.7.0.ova or nios-8.7.0.bin)"
+            echo "  Optional:"
+            echo "    • IPv4 only       (default: N, y to skip IPv6)"
+            echo ""
+            prompt_input "GM host" gm_host
+            prompt_input "Member host" member_host
+            prompt_input "Image filename" image_file
+            prompt_input_optional "IPv4 only? [y/N]" ipv4_ans "N"
+            if [[ "$ipv4_ans" =~ ^[yY]$ ]]; then IPV4_ONLY=true; fi
+            deploy_gm_sa "$gm_host" "$member_host" "$image_file"
+            ;;
+        3)
+            echo ""
+            echo "  gm-sa-physical — GM (virtual) + 1 SA member (physical)"
+            echo "  GM uses OVA, physical member uses BIN."
+            echo "  You will need to provide:"
+            echo "    1. GM host (virtual)      (e.g. vm-04-89)"
+            echo "    2. Member host (physical) (e.g. eng-lab-603)"
+            echo "    3. OVA filename           (e.g. nios-8.7.0.ova)"
+            echo "  Optional:"
+            echo "    • BIN filename    (default: uses OVA for physical member)"
+            echo "    • IPv4 only       (default: N, y to skip IPv6)"
+            echo ""
+            prompt_input "GM host (virtual)" gm_host
+            prompt_input "Member host (physical)" member_host
+            prompt_input "OVA filename" ova_file
+            prompt_input_optional "BIN filename" bin_file "OVA"
+            prompt_input_optional "IPv4 only? [y/N]" ipv4_ans "N"
+            if [[ "$ipv4_ans" =~ ^[yY]$ ]]; then IPV4_ONLY=true; fi
+            deploy_gm_sa_physical "$gm_host" "$member_host" "$ova_file" "${bin_file:-}"
+            ;;
+        4)
+            echo ""
+            echo "  ha-gm — GM HA pair (both virtual or both physical)"
+            echo "  Both hosts must be the same type. Same image for both."
+            echo "  You will need to provide:"
+            echo "    1. GM active host   (e.g. vm-02-89)"
+            echo "    2. GM passive host  (e.g. vm-03-89)"
+            echo "    3. Image filename   (e.g. nios-8.7.0.ova or nios-8.7.0.bin)"
+            echo "  Optional:"
+            echo "    • IPv4 only         (default: N, y to skip IPv6)"
+            echo ""
+            prompt_ha_pair "GM HA pair" gm_pair
+            prompt_input "Image filename" image_file
+            prompt_input_optional "IPv4 only? [y/N]" ipv4_ans "N"
+            if [[ "$ipv4_ans" =~ ^[yY]$ ]]; then IPV4_ONLY=true; fi
+            deploy_ha_gm "$gm_pair" "$image_file"
+            ;;
+        5)
+            echo ""
+            echo "  ha-gm-ha-mem — GM + HA member pair (all virtual or all physical)"
+            echo "  All 3 hosts must be the same type. Same image for all."
+            echo "  You will need to provide:"
+            echo "    1. GM host                (e.g. vm-02-89)"
+            echo "    2. HA member active host  (e.g. vm-03-89)"
+            echo "    3. HA member passive host (e.g. vm-04-89)"
+            echo "    4. Image filename         (e.g. nios-8.7.0.ova or nios-8.7.0.bin)"
+            echo "  Optional:"
+            echo "    • IPv4 only               (default: N, y to skip IPv6)"
+            echo ""
+            prompt_input "GM host" gm_host
+            prompt_ha_pair "HA member pair" ha_pair
+            prompt_input "Image filename" image_file
+            prompt_input_optional "IPv4 only? [y/N]" ipv4_ans "N"
+            if [[ "$ipv4_ans" =~ ^[yY]$ ]]; then IPV4_ONLY=true; fi
+            deploy_ha_gm_ha_mem "$gm_host" "$ha_pair" "$image_file"
+            ;;
+        6)
+            echo ""
+            echo "  crazy-grid — GM HA pair + HA member pair (virtual) + 1 member (physical)"
+            echo "  GM HA pair and HA members use OVA. Physical member uses BIN."
+            echo "  You will need to provide:"
+            echo "    1. GM active host         (e.g. vm-02-89)"
+            echo "    2. GM passive host        (e.g. vm-03-89)"
+            echo "    3. HA member active host  (e.g. vm-04-89)"
+            echo "    4. HA member passive host (e.g. vm-09-89)"
+            echo "    5. Physical member host   (e.g. eng-lab-1312)"
+            echo "    6. OVA filename           (e.g. nios-8.7.0.ova)"
+            echo "    7. BIN filename           (e.g. nios-8.7.0.bin)"
+            echo "  Optional:"
+            echo "    • IPv4 only               (default: N, y to skip IPv6)"
+            echo ""
+            prompt_ha_pair "GM HA pair" gm_pair
+            prompt_ha_pair "HA member pair" ha_pair
+            prompt_input "Physical member host" member_host
+            prompt_input "OVA filename" ova_file
+            prompt_input "BIN filename" bin_file
+            prompt_input_optional "IPv4 only? [y/N]" ipv4_ans "N"
+            if [[ "$ipv4_ans" =~ ^[yY]$ ]]; then IPV4_ONLY=true; fi
+            deploy_crazy_grid "$gm_pair" "$ha_pair" "$member_host" "$ova_file" "$bin_file"
+            ;;
+        q|Q)
+            echo "  Bye."
+            exit 0
+            ;;
+        *)
+            echo "  Invalid selection."
+            exit 1
+            ;;
+    esac
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# CLI FLAG PARSING
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# Parse --flag value pairs from arguments
+# Sets global variables: FLAG_GM, FLAG_HA, FLAG_MEMBER, FLAG_OVA, FLAG_BIN, FLAG_FILE
+parse_flags() {
+    FLAG_GM="" FLAG_HA="" FLAG_MEMBER="" FLAG_OVA="" FLAG_BIN="" FLAG_FILE=""
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --gm)           FLAG_GM="$2";       shift 2 ;;
+            --ha)           FLAG_HA="$2";       shift 2 ;;
+            --member)       FLAG_MEMBER="$2";   shift 2 ;;
+            --ova)          FLAG_OVA="$2";      shift 2 ;;
+            --bin)          FLAG_BIN="$2";      shift 2 ;;
+            --file)         FLAG_FILE="$2";     shift 2 ;;
+            --max-retries)  MAX_RETRIES="$2";   shift 2 ;;
+            --skip-check)   SKIP_IP_CHECK=true;  shift ;;
+            --ipv4-only)    IPV4_ONLY=true;      shift ;;
+            --setup-dir)    SETUP_DIR="$2";      shift 2 ;;
+            --tag)          TAG="$2";            shift 2 ;;
+            *)
+                echo "  Unknown flag: $1"
+                exit 1
+                ;;
+        esac
+    done
+}
+
+# Require a flag to be set; exit with usage if missing
+require_flag() {
+    local flag_name="$1"
+    local flag_value="$2"
+    local subcommand="$3"
+
+    if [[ -z "$flag_value" ]]; then
+        echo "  ERROR: $flag_name is required for '$subcommand'"
+        echo "  Run '$(basename "$0") --help' for usage."
+        exit 1
+    fi
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# MAIN
+# ═══════════════════════════════════════════════════════════════════════════════
+
+if [[ $# -eq 0 ]]; then
+    interactive_mode
+    exit 0
+fi
+
+SUBCOMMAND="$1"
+shift
+CLI_MODE=true
+
+case "$SUBCOMMAND" in
+    standalone)
+        parse_flags "$@"
+        require_flag "--member" "$FLAG_MEMBER" "standalone"
+        require_flag "--file"   "$FLAG_FILE"   "standalone"
+        deploy_standalone "$FLAG_MEMBER" "$FLAG_FILE"
+        ;;
+    gm-sa)
+        parse_flags "$@"
+        require_flag "--gm"     "$FLAG_GM"     "gm-sa"
+        require_flag "--member" "$FLAG_MEMBER" "gm-sa"
+        require_flag "--file"   "$FLAG_FILE"   "gm-sa"
+        deploy_gm_sa "$FLAG_GM" "$FLAG_MEMBER" "$FLAG_FILE"
+        ;;
+    gm-sa-physical)
+        parse_flags "$@"
+        require_flag "--gm"     "$FLAG_GM"     "gm-sa-physical"
+        require_flag "--member" "$FLAG_MEMBER" "gm-sa-physical"
+        require_flag "--ova"    "$FLAG_OVA"    "gm-sa-physical"
+        deploy_gm_sa_physical "$FLAG_GM" "$FLAG_MEMBER" "$FLAG_OVA" "${FLAG_BIN:-}"
+        ;;
+    ha-gm)
+        parse_flags "$@"
+        require_flag "--gm"   "$FLAG_GM"   "ha-gm"
+        require_flag "--file" "$FLAG_FILE" "ha-gm"
+        deploy_ha_gm "$FLAG_GM" "$FLAG_FILE"
+        ;;
+    ha-gm-ha-mem)
+        parse_flags "$@"
+        require_flag "--gm"   "$FLAG_GM"   "ha-gm-ha-mem"
+        require_flag "--ha"   "$FLAG_HA"   "ha-gm-ha-mem"
+        require_flag "--file" "$FLAG_FILE" "ha-gm-ha-mem"
+        deploy_ha_gm_ha_mem "$FLAG_GM" "$FLAG_HA" "$FLAG_FILE"
+        ;;
+    crazy-grid)
+        parse_flags "$@"
+        require_flag "--gm"     "$FLAG_GM"     "crazy-grid"
+        require_flag "--ha"     "$FLAG_HA"     "crazy-grid"
+        require_flag "--member" "$FLAG_MEMBER" "crazy-grid"
+        require_flag "--ova"    "$FLAG_OVA"    "crazy-grid"
+        require_flag "--bin"    "$FLAG_BIN"    "crazy-grid"
+        deploy_crazy_grid "$FLAG_GM" "$FLAG_HA" "$FLAG_MEMBER" "$FLAG_OVA" "$FLAG_BIN"
+        ;;
+    -h|--help)
+        echo "Usage: $(basename "$0") [subcommand] [flags...]"
+        echo ""
+        echo "Subcommands (simple → complex):"
+        echo ""
+        echo "  ── Standalone ──"
+        echo "  standalone        1 appliance, lab-assigned IPs (deterministic)"
+        echo "                    --member H --file F"
+        echo "  gm-sa             GM + 1 SA member (both virtual or both physical)"
+        echo "                    --gm H --member H --file F"
+        echo "  gm-sa-physical    GM (virtual) + 1 SA member (physical)"
+        echo "                    --gm H --member H --ova F [--bin F]"
+        echo ""
+        echo "  ── HA ──"
+        echo "  ha-gm             GM HA pair (both virtual or both physical)"
+        echo "                    --gm H:H --file F"
+        echo "  ha-gm-ha-mem      GM + HA member pair (all virtual or all physical)"
+        echo "                    --gm H --ha H:H --file F"
+        echo "  crazy-grid        GM HA pair + HA member pair (virtual) + 1 member (physical)"
+        echo "                    --gm H:H --ha H:H --member H --ova F --bin F"
+        echo ""
+        echo "Flags:"
+        echo "  --gm HOST[:HOST]   GM host (colon-separated for HA pair)"
+        echo "  --ha HOST:HOST     HA member pair (colon-separated)"
+        echo "  --member HOST      Member host"
+        echo "  --ova FILENAME     OVA image filename (virtual)"
+        echo "  --bin FILENAME     BIN image filename (physical)"
+        echo "  --file FILENAME    Image filename (when all hosts are same type)"
+        echo "  --max-retries N    Max IP allocation retries for HA (default: 10)"
+        echo "  --skip-check       Skip HA IP ping-check (use old behavior)"
+        echo "  --ipv4-only        Configure IPv4 only (skip IPv6)"
+        echo ""
+        echo "HA deployments automatically check allocated IPs for conflicts"
+        echo "and retry (up to --max-retries) if any IP responds to ping."
+        echo ""
+        echo "Run without arguments for interactive menu."
+        exit 0
+        ;;
+    *)
+        echo "Unknown subcommand: $SUBCOMMAND"
+        echo "Valid: standalone, gm-sa, gm-sa-physical, ha-gm, ha-gm-ha-mem, crazy-grid"
+        echo "Run without arguments for interactive menu."
+        exit 1
+        ;;
+esac
