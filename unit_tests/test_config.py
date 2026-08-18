@@ -125,6 +125,33 @@ def test_example_config_json_is_valid():
     assert defaults.output_dir is None
 
 
+def test_defaults_from_json_all_fields_optional(tmp_path):
+    """A config.json only needs the fields the caller's *Config actually
+    uses -- e.g. a LocalContainerConfig user never needs hostname/ip, so
+    omitting them must not block loading the file at all."""
+    config_file = tmp_path / "config.json"
+    config_file.write_text(json.dumps({"container": "balerion"}))
+
+    defaults = Defaults.from_json(str(config_file))
+
+    assert defaults.hostname is None
+    assert defaults.ip is None
+    assert defaults.worktree is None
+    assert defaults.container == "balerion"
+    assert defaults.chroot == config_module.DEFAULT_CHROOT_PATH
+    assert defaults.log_level == config_module.DEFAULT_LOG_LEVEL
+
+
+def test_defaults_from_json_empty_file(tmp_path):
+    config_file = tmp_path / "config.json"
+    config_file.write_text("{}")
+
+    defaults = Defaults.from_json(str(config_file))
+
+    assert defaults.hostname is None
+    assert defaults.container is None
+
+
 def test_defaults_from_json_output_dir_defaults_to_none(tmp_path):
     config_file = tmp_path / "config.json"
     config_file.write_text(json.dumps(_REQUIRED_FIELDS))

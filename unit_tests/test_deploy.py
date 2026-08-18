@@ -8,7 +8,12 @@ import logging
 import pytest
 
 from nios_test import DeployError, NiosContainer
-from nios_test.src.deploy import CONSUMER_CONTROL, CONSUMER_DEST, CONSUMER_PIDFILE
+from nios_test.src.deploy import (
+    CONSUMER_CONTROL,
+    CONSUMER_DEST,
+    CONSUMER_PIDFILE,
+    NIOS_MODEL_CLOUDINIT_MANIFEST,
+)
 
 LOGGER = logging.getLogger("nios_test.unit_test")
 
@@ -208,6 +213,58 @@ def test_deploy_token_py_cleans_pycache_per_file(
 ):
     c = make_container(fake_transport, chroot_dir, worktree_dir)
     c.deploy_token_py(groups={"pyabs"})
+    run_cmds = [call[1] for call in fake_transport.calls if call[0] == "run"]
+    assert any("__pycache__" in cmd for cmd in run_cmds)
+
+
+# -- deploy_nios_model_cloud_init -------------------------------------------------
+
+def test_deploy_nios_model_cloud_init_uploads_all_three_files(
+    chroot_dir, worktree_dir, fake_transport,
+):
+    c = make_container(fake_transport, chroot_dir, worktree_dir)
+    result = c.deploy_nios_model_cloud_init()
+
+    assert result.artifact == "nios_model_cloud_init"
+    uploaded_dests = {call[2] for call in fake_transport.calls if call[0] == "upload"}
+    assert uploaded_dests == {dest for _, dest in NIOS_MODEL_CLOUDINIT_MANIFEST}
+
+
+def test_deploy_nios_model_cloud_init_creates_handlers_dir(
+    chroot_dir, worktree_dir, fake_transport,
+):
+    c = make_container(fake_transport, chroot_dir, worktree_dir)
+    c.deploy_nios_model_cloud_init()
+    assert any(
+        "mkdir -p /var/lib/cloud/handlers" in call[1]
+        for call in fake_transport.calls if call[0] == "run"
+    )
+
+
+def test_deploy_nios_model_cloud_init_missing_local_file_raises(
+    chroot_dir, tmp_path, fake_transport,
+):
+    empty_worktree = tmp_path / "empty_worktree"
+    empty_worktree.mkdir()
+    c = make_container(fake_transport, chroot_dir, empty_worktree)
+    with pytest.raises(DeployError):
+        c.deploy_nios_model_cloud_init()
+
+
+def test_deploy_nios_model_cloud_init_raises_on_hash_mismatch(
+    chroot_dir, worktree_dir, fake_transport_factory,
+):
+    transport = fake_transport_factory(corrupt_uploads=True)
+    c = make_container(transport, chroot_dir, worktree_dir)
+    with pytest.raises(DeployError):
+        c.deploy_nios_model_cloud_init()
+
+
+def test_deploy_nios_model_cloud_init_cleans_pycache_per_file(
+    chroot_dir, worktree_dir, fake_transport,
+):
+    c = make_container(fake_transport, chroot_dir, worktree_dir)
+    c.deploy_nios_model_cloud_init()
     run_cmds = [call[1] for call in fake_transport.calls if call[0] == "run"]
     assert any("__pycache__" in cmd for cmd in run_cmds)
 

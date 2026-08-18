@@ -1,5 +1,9 @@
 """Shared config factories and up/down checks for nios_test integration tests.
 
+Private to integration_tests/ — not part of nios_test's public API. Standalone
+scripts (scripts/tickets/*) should use nios_test's exported classes/Defaults
+directly instead of importing from here.
+
 For the integration_tests/ pytest suite itself, test execution/reporting (the
 old test()/skip()/summary() harness) is gone — pytest + conftest.py
 fixtures/markers replace it, and only the config factories and up/down checks
@@ -14,9 +18,11 @@ scripts/tickets/*/test_*.py.
 import os
 import subprocess
 import time
-from datetime import datetime
 
 from nios_test import (
+    NIOS_CONSOLE_PASSWORD,
+    NIOS_CONSOLE_USER,
+    WAPI_VERSION,
     ApplianceConfig,
     BuildConfig,
     Defaults,
@@ -25,11 +31,6 @@ from nios_test import (
     LocalDockerTransport,
     LocalNiosContainer,
     ssh_reachable,
-)
-from nios_test.src.constants import (
-    NIOS_CONSOLE_PASSWORD,
-    NIOS_CONSOLE_USER,
-    WAPI_VERSION,
 )
 
 _defaults = Defaults.from_json()
@@ -40,23 +41,6 @@ DEFAULT_CHROOT = _defaults.chroot
 DEFAULT_WORKTREE = _defaults.worktree
 DEFAULT_CONTAINER = _defaults.container
 LOG_LEVEL = _defaults.log_level
-
-NCC_DOWN_REASON = f"{DEFAULT_CONTAINER} slot is not running"
-APPLIANCE_DOWN_REASON = f"{DEFAULT_HOSTNAME} is not reachable via SSH"
-
-_RESULTS_BASE = os.environ.get(
-    "NIOS_TEST_OUTPUT_DIR",
-    _defaults.output_dir or "/blox/adixon1/scripts/nios_test/results",
-)
-
-# Computed eagerly at import time so standalone ticket-test scripts (which
-# never trigger conftest.py) still get a real per-run directory. When this
-# module is imported under pytest, conftest.py's pytest_configure()
-# overwrites this with a fresh run dir shared with the junit-xml report —
-# that reassignment always runs after this line, so it's safe either way.
-OUTPUT_DIR: str = os.path.join(
-    _RESULTS_BASE, datetime.now().strftime("%Y-%m-%d_%H-%M-%S"),
-)
 
 
 def resolve_ip():
@@ -91,44 +75,44 @@ def disable_ssh_rate_limit(ip=None) -> None:
     )
 
 
-def appliance_config(log_level=LOG_LEVEL):
+def appliance_config(log_level=LOG_LEVEL, output_dir=None):
     return ApplianceConfig(
         hostname=DEFAULT_HOSTNAME,
         ip=resolve_ip(),
         chroot=DEFAULT_CHROOT,
         worktree=DEFAULT_WORKTREE,
         log_level=log_level,
-        output_dir=OUTPUT_DIR,
+        output_dir=output_dir,
     )
 
 
-def local_appliance_config(log_level=LOG_LEVEL, ip=None):
+def local_appliance_config(log_level=LOG_LEVEL, ip=None, output_dir=None):
     return LocalApplianceConfig(
         container_name=DEFAULT_CONTAINER,
         chroot=DEFAULT_CHROOT,
         worktree=DEFAULT_WORKTREE,
         ip=ip,
         log_level=log_level,
-        output_dir=OUTPUT_DIR,
+        output_dir=output_dir,
     )
 
 
-def local_container_config(log_level=LOG_LEVEL):
+def local_container_config(log_level=LOG_LEVEL, output_dir=None):
     return LocalContainerConfig(
         container_name=DEFAULT_CONTAINER,
         chroot=DEFAULT_CHROOT,
         worktree=DEFAULT_WORKTREE,
         log_level=log_level,
-        output_dir=OUTPUT_DIR,
+        output_dir=output_dir,
     )
 
 
-def build_config(log_level=LOG_LEVEL):
+def build_config(log_level=LOG_LEVEL, output_dir=None):
     return BuildConfig(
         worktree=DEFAULT_WORKTREE,
         slot=DEFAULT_CONTAINER,
         log_level=log_level,
-        output_dir=OUTPUT_DIR,
+        output_dir=output_dir,
     )
 
 

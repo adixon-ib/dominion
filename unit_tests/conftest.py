@@ -28,6 +28,7 @@ from nios_test.src.deploy import (
     CONSUMER_SRC,
     IBAP_FILES,
     IBAP_SUBPATH,
+    NIOS_MODEL_CLOUDINIT_MANIFEST,
     PYABS_FILES,
     PYABS_SUBPATH,
     WAPI_FILES,
@@ -154,6 +155,11 @@ def worktree_dir(tmp_path):
     consumer = wt / CONSUMER_SRC
     consumer.parent.mkdir(parents=True, exist_ok=True)
     consumer.write_text("#!/usr/bin/python3 -u\nprint('consumer')\n")
+
+    for src, _dest in NIOS_MODEL_CLOUDINIT_MANIFEST:
+        f = wt / src
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text(f"# dummy {os.path.basename(src)}\n")
 
     return wt
 

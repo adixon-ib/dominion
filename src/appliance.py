@@ -60,6 +60,12 @@ class _ApplianceBase:
     def deploy_token_stats_consumer(self, **kwargs) -> DeployResult:
         return self.container.deploy_token_stats_consumer(**kwargs)
 
+    def deploy_clusterd(self) -> DeployResult:
+        return self.container.deploy_clusterd()
+
+    def deploy_nios_model_cloud_init(self) -> DeployResult:
+        return self.container.deploy_nios_model_cloud_init()
+
     def revert(self, timeout: int = NIOS_REBOOT_TIMEOUT) -> None:
         """Restart the nios container, discarding hot-deployed files and
         restoring image-layer originals."""

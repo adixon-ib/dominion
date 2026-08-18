@@ -170,7 +170,21 @@ class SSHDockerTransport(_BaseTransport):
         self._exec(scp_argv)
 
         docker_cp = f"docker cp {host_tmp} {self.container_name}:{remote_path}"
-        self.run_on_host(docker_cp)
+        code, _, err = self.run_on_host(docker_cp, check=False)
+        if code != 0:
+            # docker cp can fail to resolve an otherwise-existing container
+            # path (observed against a real appliance for a directory under
+            # /var/lib/cloud/handlers) even though the directory is present
+            # and other docker cp calls in the same session succeed. Fall
+            # back to piping the file through docker exec's stdin, which
+            # doesn't hit whatever path-resolution issue docker cp has.
+            self._logger.debug(
+                "docker cp failed (%s) — falling back to docker exec tee",
+                err.strip(),
+            )
+            tee_cmd = f"docker exec -i {self.container_name} tee {remote_path} > /dev/null"
+            argv = self._ssh_base + [tee_cmd]
+            self._exec(argv, stdin_data=local.read_bytes())
 
         self.run_on_host(f"rm -f {host_tmp}", check=False)
 

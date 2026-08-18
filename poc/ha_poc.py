@@ -30,23 +30,20 @@ Phases:
 
 import argparse
 import json
-import os
 import re
 import subprocess
 import sys
 import time
 
-SCRIPTS_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-sys.path.insert(0, SCRIPTS_DIR)
-
-from nios_test import LocalNiosContainer, LocalContainerConfig, create_logger
-from nios_test.src.constants import (
-    NIOS_CONSOLE_USER as USER,
-    NIOS_CONSOLE_PASSWORD as PASSWD,
+from nios_test import (
+    NIOS_CONSOLE_PASSWORD,
+    NIOS_CONSOLE_USER,
     NIOS_REBOOT_TIMEOUT,
     NIOS_WAPI_POLL_INTERVAL,
     NIOS_WAPI_READY_TIMEOUT,
     WAPI_VERSION,
+    LocalContainerConfig,
+    LocalNiosContainer,
 )
 
 # ---- configuration ----
@@ -79,7 +76,7 @@ def sh(cmd, check=True):
 def wapi(ip, method, path, data=None):
     data_flag = f" -d '{json.dumps(data)}'" if data else ""
     out = sh(
-        f"curl -sk -X {method} -u {USER}:{PASSWD} "
+        f"curl -sk -X {method} -u {NIOS_CONSOLE_USER}:{NIOS_CONSOLE_PASSWORD} "
         f'-H "Content-Type: application/json"{data_flag} '
         f"https://{ip}/wapi/{WAPI_VERSION}/{path}",
         check=False,
@@ -96,7 +93,7 @@ def wait_wapi(ip, timeout=NIOS_WAPI_READY_TIMEOUT):
         try:
             r = subprocess.run(
                 f"curl -sk -o /dev/null -w '%{{http_code}}' "
-                f"-u {USER}:{PASSWD} --max-time 5 "
+                f"-u {NIOS_CONSOLE_USER}:{NIOS_CONSOLE_PASSWORD} --max-time 5 "
                 f"https://{ip}/wapi/{WAPI_VERSION}/grid",
                 shell=True, capture_output=True, text=True, timeout=10,
             )
@@ -153,14 +150,14 @@ def phase_0():
     active_ip = get_lan_ip(ACTIVE_SLOT)
     passive_ip = get_lan_ip(PASSIVE_SLOT)
 
-    print(f"\n  IP plan:")
+    print("\n  IP plan:")
     print(f"    {ACTIVE_SLOT} LAN (eth1):  {active_ip}")
     print(f"    {PASSIVE_SLOT} LAN (eth1): {passive_ip}")
     print(f"    {ACTIVE_SLOT} HA (eth2):   {HA_ACTIVE}")
     print(f"    {PASSIVE_SLOT} HA (eth2):  {HA_PASSIVE}")
     print(f"    VIP:                        {VIP}")
     print(f"    VRID:                       {VRID}")
-    print(f"    All in 172.20.0.0/16 (ncc_lan1 subnet)")
+    print("    All in 172.20.0.0/16 (ncc_lan1 subnet)")
     return active_ip, passive_ip
 
 
@@ -334,8 +331,11 @@ def phase_5():
     if wait_wapi(VIP, timeout=NIOS_WAPI_READY_TIMEOUT):
         print(f"  Grid WAPI responding at {VIP}")
     else:
-        print(f"  WARNING: VIP not responding — grid may still be syncing")
-        print(f"  Check manually: curl -sk -u {USER}:{PASSWD} https://{VIP}/wapi/{WAPI_VERSION}/grid")
+        print("  WARNING: VIP not responding — grid may still be syncing")
+        print(
+            f"  Check manually: curl -sk -u {NIOS_CONSOLE_USER}:{NIOS_CONSOLE_PASSWORD} "
+            f"https://{VIP}/wapi/{WAPI_VERSION}/grid"
+        )
 
 
 def phase_6():
@@ -387,7 +387,7 @@ def discover(ip):
 
     members = wapi(ip, "GET", "member?_return_fields+")
     if isinstance(members, list) and members:
-        print(f"\n  Full member object (all fields):")
+        print("\n  Full member object (all fields):")
         print(json.dumps(members[0], indent=2))
 
 

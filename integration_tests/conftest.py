@@ -11,21 +11,11 @@ if/elif/else in every file).
 from __future__ import annotations
 
 import os
-import sys
 from datetime import datetime
 
 import pytest
 
-SCRIPTS_DIR = os.path.dirname(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-)
-if SCRIPTS_DIR not in sys.path:
-    sys.path.insert(0, SCRIPTS_DIR)
-
-import helpers
 from helpers import (
-    APPLIANCE_DOWN_REASON,
-    NCC_DOWN_REASON,
     appliance_config,
     disable_ssh_rate_limit,
     get_ncc_ip,
@@ -34,11 +24,19 @@ from helpers import (
     local_appliance_config,
     local_container_config,
 )
-from nios_test import Appliance, LocalAppliance, LocalNiosContainer
-
-_RESULTS_BASE = os.environ.get(
-    "NIOS_TEST_OUTPUT_DIR", "/blox/adixon1/scripts/nios_test/results",
+from nios_test import (
+    DEFAULT_RESULTS_DIR,
+    Appliance,
+    Defaults,
+    LocalAppliance,
+    LocalNiosContainer,
 )
+
+_defaults = Defaults.from_json()
+_RESULTS_BASE = os.environ.get("NIOS_TEST_OUTPUT_DIR", DEFAULT_RESULTS_DIR)
+
+NCC_DOWN_REASON = f"{_defaults.container} slot is not running"
+APPLIANCE_DOWN_REASON = f"{_defaults.hostname} is not reachable via SSH"
 
 
 # -- CLI options ------------------------------------------------------------------
@@ -69,10 +67,15 @@ def pytest_configure(config):
     run_id = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     run_dir = os.path.join(_RESULTS_BASE, run_id)
     os.makedirs(run_dir, exist_ok=True)
-    helpers.OUTPUT_DIR = run_dir
+    config.nios_test_output_dir = run_dir
 
     if not config.option.xmlpath:
         config.option.xmlpath = os.path.join(run_dir, "junit.xml")
+
+
+@pytest.fixture(scope="session")
+def output_dir(request) -> str:
+    return request.config.nios_test_output_dir
 
 
 def pytest_collection_modifyitems(config, items):
@@ -107,10 +110,10 @@ def _ssh_rate_limit_cleared():
 
 
 @pytest.fixture(scope="session")
-def ssh_appliance(_ssh_rate_limit_cleared):
+def ssh_appliance(_ssh_rate_limit_cleared, output_dir):
     if not is_appliance_up():
         pytest.skip(APPLIANCE_DOWN_REASON)
-    return Appliance.from_config(appliance_config())
+    return Appliance.from_config(appliance_config(output_dir=output_dir))
 
 
 @pytest.fixture(scope="session")
@@ -124,10 +127,10 @@ def ssh_container(ssh_appliance):
 
 
 @pytest.fixture(scope="session")
-def local_ncc_container():
+def local_ncc_container(output_dir):
     if not is_ncc_up():
         pytest.skip(NCC_DOWN_REASON)
-    return LocalNiosContainer.from_config(local_container_config())
+    return LocalNiosContainer.from_config(local_container_config(output_dir=output_dir))
 
 
 @pytest.fixture(scope="session")
@@ -136,17 +139,19 @@ def local_transport(local_ncc_container):
 
 
 @pytest.fixture(scope="session")
-def local_appliance():
+def local_appliance(output_dir):
     if not is_ncc_up():
         pytest.skip(NCC_DOWN_REASON)
-    return LocalAppliance.from_config(local_appliance_config(ip=get_ncc_ip()))
+    config = local_appliance_config(ip=get_ncc_ip(), output_dir=output_dir)
+    return LocalAppliance.from_config(config)
 
 
 @pytest.fixture(scope="session")
-def local_networked_appliance():
+def local_networked_appliance(output_dir):
     """Heavier than `local_appliance`: pre-checks WAPI via get_ncc_ip(), falls
     through to set_network() (~5-7 min) if the network isn't configured yet."""
     if not is_ncc_up():
         pytest.skip(NCC_DOWN_REASON)
     ncc_ip = get_ncc_ip()
-    return LocalAppliance.from_config(local_appliance_config(ip=ncc_ip))
+    config = local_appliance_config(ip=ncc_ip, output_dir=output_dir)
+    return LocalAppliance.from_config(config)

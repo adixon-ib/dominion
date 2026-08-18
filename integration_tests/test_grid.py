@@ -14,7 +14,6 @@ import os
 import re
 import subprocess
 
-import helpers
 import pytest
 from helpers import DEFAULT_CHROOT, DEFAULT_WORKTREE, LOG_LEVEL, WAPI_VERSION
 from nios_test import Appliance, Grid, GridConfig, SSHDockerTransport
@@ -25,7 +24,7 @@ _VALID_IP = re.compile(r"^\d{1,3}(\.\d{1,3}){3}$")
 
 
 @pytest.fixture(scope="module")
-def grid():
+def grid(output_dir):
     image_file = os.environ.get("IMAGE_FILE")
     if not image_file:
         pytest.skip("IMAGE_FILE env var not set")
@@ -36,7 +35,7 @@ def grid():
         chroot=DEFAULT_CHROOT,
         worktree=DEFAULT_WORKTREE,
         log_level=LOG_LEVEL,
-        output_dir=helpers.OUTPUT_DIR,
+        output_dir=output_dir,
     )
     return Grid.from_config(config)
 

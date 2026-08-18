@@ -19,11 +19,10 @@ import traceback
 import xml.etree.ElementTree as ET
 from datetime import datetime
 
-from .config import Defaults
+from .config import DEFAULT_RESULTS_DIR, Defaults
 
 _defaults = Defaults.from_json()
 DEFAULT_IP = _defaults.ip
-DEFAULT_RESULTS_DIR = "/blox/adixon1/scripts/nios_test/results"
 
 
 def resolve_ip_from_argv():

@@ -72,6 +72,18 @@ CONSUMER_DEST = "/infoblox/one/bin/token_stats_consumer"
 CONSUMER_CONTROL = "/infoblox/one/bin/token_stats_consumer_control"
 CONSUMER_PIDFILE = "/infoblox/var/token_stats_consumer.pid"
 
+CLOUDINIT_SUBPATH = "products/one/server/src/cloudinit-gpl"
+CLOUD_INIT_PKG = "/usr/lib/python3/dist-packages/cloudinit"  # Makefile.include
+
+NIOS_MODEL_CLOUDINIT_MANIFEST = [
+    (f"{CLOUDINIT_SUBPATH}/config/cc_ib_nios_model_module.py",
+     f"{CLOUD_INIT_PKG}/config/cc_ib_nios_model_module.py"),
+    (f"{CLOUDINIT_SUBPATH}/handlers/ib_config_handler.py",
+     "/var/lib/cloud/handlers/ib_config_handler.py"),
+    (f"{CLOUDINIT_SUBPATH}/etc/95_nios.cfg",
+     "/etc/cloud/cloud.cfg.d/95_nios.cfg"),
+]
+
 
 class DeployMixin:
 
@@ -234,6 +246,51 @@ class DeployMixin:
             restarted=restarted,
         )
 
+    # -- deploy: clusterd --------------------------------------------------
+
+    def deploy_clusterd(self) -> DeployResult:
+        local_path = self._resolve_chroot("infoblox/one/bin/clusterd")
+        dest = "/infoblox/one/bin/clusterd"
+        staging = "/tmp/clusterd"
+
+        if not os.path.isfile(local_path):
+            raise DeployError(f"Local binary not found: {local_path}", artifact="clusterd")
+
+        pre_hash = self._transport.host_checksum(dest)
+        local_h = self._local_md5(local_path)
+
+        self._transport.upload_to_host(local_path, staging)
+
+        # rm before cp avoids "text file busy" on the running binary
+        code, _, err = self._transport.run_on_host(
+            f"rm -f {dest} && cp {staging} {dest} && chmod +x {dest} && rm -f {staging}",
+            check=False,
+        )
+        if code != 0:
+            raise DeployError(f"Replace clusterd failed: {err.strip()}", artifact="clusterd")
+
+        post_hash = self._transport.host_checksum(dest)
+        if post_hash != local_h:
+            raise DeployError(
+                f"Post-deploy hash mismatch: local={local_h} remote={post_hash}",
+                artifact="clusterd",
+            )
+
+        changed = pre_hash != post_hash
+        restarted = False
+        if changed:
+            self._transport.run("killall clusterd 2>/dev/null || true", check=False)
+            restarted = True
+            self._logger.info("clusterd killed — process_manager will respawn")
+
+        return DeployResult(
+            artifact="clusterd",
+            changed=changed,
+            local_hash=local_h,
+            remote_hash=post_hash,
+            restarted=restarted,
+        )
+
     # -- deploy: token Python files ----------------------------------------
 
     def deploy_token_py(
@@ -335,6 +392,47 @@ class DeployMixin:
                 "groups": sorted(groups),
                 "skipped": skipped,
             },
+        )
+
+    # -- deploy: nios_model cloud-init module (NIOSRFE-10221) --------------
+
+    def deploy_nios_model_cloud_init(self) -> DeployResult:
+        """Deploy the cc_ib_nios_model_module cloud-init fix: the module
+        itself, the merger whitelist update in ib_config_handler.py, and its
+        registration in 95_nios.cfg's cloud_final_modules. No restart here --
+        the module requests its own product restart when actually run."""
+        manifest = [
+            (self._resolve_worktree(src), dest)
+            for src, dest in NIOS_MODEL_CLOUDINIT_MANIFEST
+        ]
+        for local_path, _ in manifest:
+            if not os.path.isfile(local_path):
+                raise DeployError(
+                    f"Source file not found: {local_path}",
+                    artifact="nios_model_cloud_init",
+                )
+
+        self._transport.run("mkdir -p /var/lib/cloud/handlers", check=False)
+
+        file_results = []
+        for local_path, dest in manifest:
+            local_h = self._local_md5(local_path)
+            self._transport.upload(local_path, dest)
+            self._clean_pycache(dest)
+
+            remote_h = self._remote_md5(dest)
+            if remote_h != local_h:
+                raise DeployError(
+                    f"Hash mismatch for {os.path.basename(dest)}: "
+                    f"local={local_h} remote={remote_h}",
+                    artifact=dest,
+                )
+            file_results.append({"file": os.path.basename(dest), "hash": local_h})
+
+        return DeployResult(
+            artifact="nios_model_cloud_init",
+            changed=True,
+            details={"files": file_results},
         )
 
     # -- deploy: token_stats_consumer --------------------------------------

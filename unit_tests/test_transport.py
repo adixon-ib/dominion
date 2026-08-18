@@ -152,6 +152,31 @@ def test_ssh_upload_scps_then_docker_cps_then_cleans_up(monkeypatch, tmp_path):
     assert any("rm -f" in " ".join(c) for c in calls)
 
 
+def test_ssh_upload_falls_back_to_tee_when_docker_cp_fails(monkeypatch, tmp_path):
+    import nios_test.src.transport as transport_mod
+    local = tmp_path / "file.py"
+    local.write_text("content")
+    calls = []
+
+    def fake_run(argv, **kwargs):
+        calls.append((argv, kwargs.get("input")))
+        if "docker cp" in " ".join(argv):
+            return FakeCompletedProcess(1, "", "Could not find the file")
+        return FakeCompletedProcess(0, "", "")
+
+    monkeypatch.setattr(transport_mod.subprocess, "run", fake_run)
+    t = SSHDockerTransport(host="10.35.211.4", container_name="nios")
+
+    t.upload(str(local), "/var/lib/cloud/handlers/ib_config_handler.py")
+
+    tee_calls = [
+        (argv, data) for argv, data in calls
+        if "tee /var/lib/cloud/handlers/ib_config_handler.py" in " ".join(argv)
+    ]
+    assert len(tee_calls) == 1
+    assert tee_calls[0][1] == b"content"
+
+
 def test_ssh_upload_raises_when_local_file_missing():
     t = SSHDockerTransport(host="10.35.211.4")
     with pytest.raises(TransportError):
