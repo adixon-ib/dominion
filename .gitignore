@@ -1,5 +1,12 @@
 __pycache__/
 *.pyc
+*.egg-info/
 results/
 src/config.json
 src/graphify-out/
+graphify-out/
+.claude/
+.ruff_cache/
+.pytest_cache/
+HANDOFF.md
+presentation.md
