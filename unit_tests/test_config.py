@@ -10,7 +10,7 @@ import os
 
 import pytest
 
-from nios_test import (
+from dominion import (
     ApplianceConfig,
     BuildConfig,
     Defaults,
@@ -18,7 +18,7 @@ from nios_test import (
     LocalApplianceConfig,
     LocalContainerConfig,
 )
-from nios_test.src import config as config_module
+from dominion.src import config as config_module
 
 _EXAMPLE_CONFIG_PATH = os.path.join(os.path.dirname(config_module.__file__), "config.example.json")
 

@@ -7,8 +7,8 @@ itself is monkeypatched to return one.
 import pexpect
 import pytest
 
-from nios_test import ConsoleSession, ShellSession
-from nios_test.src.session import BaseSession
+from dominion import ConsoleSession, ShellSession
+from dominion.src.session import BaseSession
 
 # -- BaseSession._clean() ---------------------------------------------------------
 
@@ -185,7 +185,7 @@ def test_console_session_uses_spawn_cmd_as_given():
 # -- ConsoleSession._open() login branching -------------------------------------------
 
 def test_console_session_open_handles_login_prompt(monkeypatch, fake_child_factory):
-    import nios_test.src.session as session_mod
+    import dominion.src.session as session_mod
     child = fake_child_factory(script=[
         (0, "", "login: "),
         (0, "", "Password: "),
@@ -207,7 +207,7 @@ def test_console_session_open_handles_login_prompt(monkeypatch, fake_child_facto
 def test_console_session_open_handles_password_only_prompt(
     monkeypatch, fake_child_factory,
 ):
-    import nios_test.src.session as session_mod
+    import dominion.src.session as session_mod
     child = fake_child_factory(script=[
         (1, "", "Password: "),
         (0, "", "Infoblox > "),
@@ -227,7 +227,7 @@ def test_console_session_open_handles_password_only_prompt(
 def test_console_session_open_already_at_prompt_skips_auth(
     monkeypatch, fake_child_factory,
 ):
-    import nios_test.src.session as session_mod
+    import dominion.src.session as session_mod
     child = fake_child_factory(script=[(2, "", "Infoblox > ")])
     monkeypatch.setattr(session_mod.pexpect, "spawn", lambda *a, **k: child)
 

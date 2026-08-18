@@ -1,7 +1,7 @@
-"""Shared config factories and up/down checks for nios_test integration tests.
+"""Shared config factories and up/down checks for dominion integration tests.
 
-Private to integration_tests/ — not part of nios_test's public API. Standalone
-scripts (scripts/tickets/*) should use nios_test's exported classes/Defaults
+Private to integration_tests/ — not part of dominion's public API. Standalone
+scripts (scripts/tickets/*) should use dominion's exported classes/Defaults
 directly instead of importing from here.
 
 For the integration_tests/ pytest suite itself, test execution/reporting (the
@@ -10,8 +10,8 @@ fixtures/markers replace it, and only the config factories and up/down checks
 below are used.
 
 The old test()/skip()/summary()/resolve_ip_from_argv() harness has moved to
-nios_test/src/harness.py (exported from the top-level nios_test package) —
-it's the general run harness for any standalone nios_test script, not just
+dominion/src/harness.py (exported from the top-level dominion package) —
+it's the general run harness for any standalone dominion script, not just
 scripts/tickets/*/test_*.py.
 """
 
@@ -19,7 +19,7 @@ import os
 import subprocess
 import time
 
-from nios_test import (
+from dominion import (
     NIOS_CONSOLE_PASSWORD,
     NIOS_CONSOLE_USER,
     WAPI_VERSION,

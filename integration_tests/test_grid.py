@@ -16,7 +16,7 @@ import subprocess
 
 import pytest
 from helpers import DEFAULT_CHROOT, DEFAULT_WORKTREE, LOG_LEVEL, WAPI_VERSION
-from nios_test import Appliance, Grid, GridConfig, SSHDockerTransport
+from dominion import Appliance, Grid, GridConfig, SSHDockerTransport
 
 pytestmark = pytest.mark.destructive
 

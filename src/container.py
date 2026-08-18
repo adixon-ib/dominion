@@ -179,7 +179,7 @@ class LocalNiosContainer(LocalNetworkMixin, NiosContainer):
     @classmethod
     def from_config(cls, config: LocalContainerConfig) -> LocalNiosContainer:
         logger = config.logger or create_logger(
-            name=f"nios_test.{config.container_name}",
+            name=f"dominion.{config.container_name}",
             level=config.log_level,
             log_file=config.log_file,
         )

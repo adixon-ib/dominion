@@ -1,4 +1,4 @@
-# nios_test: Automating NIOS from Python
+# dominion: Automating NIOS from Python
 
 A library for deploying, testing, and managing NIOS appliances programmatically.
 
@@ -13,9 +13,9 @@ A library for deploying, testing, and managing NIOS appliances programmatically.
 
 ---
 
-## Slide 2: What nios_test Is
+## Slide 2: What dominion Is
 
-nios_test is a Python library that gives scripts a structured way to talk to NIOS appliances, both remote (lab VMs) and local (NCC containers on your dev machine).
+dominion is a Python library that gives scripts a structured way to talk to NIOS appliances, both remote (lab VMs) and local (NCC containers on your dev machine).
 
 It provides four entry points:
 
@@ -92,7 +92,7 @@ This is a multi-member HA grid, configured end-to-end, with no GUI. Two NCC cont
 
 ## Slide 7: Context Engineering for AI
 
-nios_test is designed as a context engineering layer for Claude.
+dominion is designed as a context engineering layer for Claude.
 
 **The idea:** instead of giving an AI agent access to everything and hoping it figures out the right approach, you give it a narrow, well-defined set of operations. Appliance objects, deploy methods, session handles. Claude doesn't need to know how SSH transport works or how to pipe files into a Docker container. It calls `appliance.deploy_token_py()` and it works.
 
@@ -102,7 +102,7 @@ This is what context engineering means: constraining the problem space so the AI
 
 ## Slide 8: Scripts That Last Forever
 
-The scripts Claude generates using nios_test are not throwaway prompts. They are real Python programs that:
+The scripts Claude generates using dominion are not throwaway prompts. They are real Python programs that:
 
 - Run independently, no AI needed after creation
 - Produce structured output (JUnit XML, summary.txt)
@@ -137,4 +137,4 @@ Engineers write ticket tests as standalone scripts. Each script creates a `Run`,
 | AI generates fragile one-off commands | AI generates durable, testable scripts |
 | Each engineer reinvents the wheel | Shared library, consistent patterns |
 
-nios_test turns manual, error-prone, one-off operations into scriptable, repeatable, self-verifying automation. It makes AI-assisted development reliable by giving Claude a structured interface instead of raw shell access. And it eliminates lab dependency for the most common development workflows.
+dominion turns manual, error-prone, one-off operations into scriptable, repeatable, self-verifying automation. It makes AI-assisted development reliable by giving Claude a structured interface instead of raw shell access. And it eliminates lab dependency for the most common development workflows.

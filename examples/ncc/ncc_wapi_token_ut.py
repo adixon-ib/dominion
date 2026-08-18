@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run WAPI unit tests in a running NCC container, using the nios_test library.
+"""Run WAPI unit tests in a running NCC container, using the dominion library.
 
 Assumes WAPI files are already deployed (via ncc_wapi_deploy.py). Runs the
 requested test classes via run_py_tests and saves results.
@@ -22,7 +22,7 @@ import time
 
 from _common import container_from_args
 
-from nios_test import LocalNiosContainer
+from dominion import LocalNiosContainer
 
 DEFAULT_RESULTS_ROOT = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "results", "ncc")
 SUMMARY_LOG = os.path.join(DEFAULT_RESULTS_ROOT, "summary.log")

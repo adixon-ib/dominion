@@ -81,8 +81,8 @@ def test_local_host_checksum(local_transport):
 
 @pytest.mark.ncc
 def test_local_upload(local_transport):
-    marker = "nios_test_upload_check_12345"
-    remote_path = "/tmp/_nios_test_upload_check.txt"
+    marker = "dominion_upload_check_12345"
+    remote_path = "/tmp/_dominion_upload_check.txt"
 
     with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as f:
         f.write(marker)

@@ -13,10 +13,10 @@ Prerequisites:
     Wait ~300s for NIOS to boot in both containers.
 
 Usage:
-    python3 scripts/nios_test/poc/ha_poc.py
-    python3 scripts/nios_test/poc/ha_poc.py --phase 3          # resume from phase 3
-    python3 scripts/nios_test/poc/ha_poc.py --discover          # dump WAPI member schema
-    python3 scripts/nios_test/poc/ha_poc.py --active-ip 172.20.0.2 --phase 3
+    python3 scripts/dominion/poc/ha_poc.py
+    python3 scripts/dominion/poc/ha_poc.py --phase 3          # resume from phase 3
+    python3 scripts/dominion/poc/ha_poc.py --discover          # dump WAPI member schema
+    python3 scripts/dominion/poc/ha_poc.py --active-ip 172.20.0.2 --phase 3
 
 Phases:
     0  Preflight — verify containers running, show IP plan
@@ -35,7 +35,7 @@ import subprocess
 import sys
 import time
 
-from nios_test import (
+from dominion import (
     NIOS_CONSOLE_PASSWORD,
     NIOS_CONSOLE_USER,
     NIOS_REBOOT_TIMEOUT,

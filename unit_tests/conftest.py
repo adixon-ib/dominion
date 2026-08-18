@@ -1,4 +1,4 @@
-"""Shared fakes for nios_test unit tests.
+"""Shared fakes for dominion unit tests.
 
 Nothing here touches a network, docker, or a real pexpect spawn. `FakeTransport`
 stands in for SSHDockerTransport/LocalDockerTransport — it tracks real file
@@ -23,8 +23,8 @@ if SCRIPTS_DIR not in sys.path:
 
 import pytest
 
-from nios_test import CommandError
-from nios_test.src.deploy import (
+from dominion import CommandError
+from dominion.src.deploy import (
     CONSUMER_SRC,
     IBAP_FILES,
     IBAP_SUBPATH,

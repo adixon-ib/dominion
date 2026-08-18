@@ -8,7 +8,7 @@ import sys
 SCRIPTS_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, SCRIPTS_DIR)
 
-from nios_test import LocalNiosContainer, LocalContainerConfig  # noqa: E402
+from dominion import LocalNiosContainer, LocalContainerConfig  # noqa: E402
 
 
 def container_from_args(container_name: str, worktree: str | None, chroot: str | None) -> LocalNiosContainer:

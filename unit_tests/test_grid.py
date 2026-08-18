@@ -4,11 +4,11 @@ _make_appliance. No real grid_deploy subprocess and no real SSH probe."""
 import logging
 from collections import namedtuple
 
-import nios_test.src.grid as grid_mod
-from nios_test import ApplianceConfig, Grid, GridConfig
-from nios_test.src.grid import _build_cmd, _make_appliance, _parse_tag_file
+import dominion.src.grid as grid_mod
+from dominion import ApplianceConfig, Grid, GridConfig
+from dominion.src.grid import _build_cmd, _make_appliance, _parse_tag_file
 
-LOGGER = logging.getLogger("nios_test.unit_test")
+LOGGER = logging.getLogger("dominion.unit_test")
 
 MockAppliance = namedtuple("MockAppliance", ["hostname", "ip"])
 

@@ -4,8 +4,8 @@ import logging
 
 import pytest
 
-from nios_test import create_logger, resolve_log_file
-from nios_test.src.log import (
+from dominion import create_logger, resolve_log_file
+from dominion.src.log import (
     VERBOSE,
     VERBOSE_EX,
     DebugFormatter,
@@ -41,7 +41,7 @@ def test_resolve_log_file_neither_given_returns_none():
 
 def test_create_logger_rejects_unknown_level():
     with pytest.raises(ValueError, match="Unknown level"):
-        create_logger(name="nios_test.unit.bad_level", level="loud")
+        create_logger(name="dominion.unit.bad_level", level="loud")
 
 
 @pytest.mark.parametrize(("level", "expected_level", "formatter_cls"), [
@@ -51,7 +51,7 @@ def test_create_logger_rejects_unknown_level():
     ("verbose-ex", VERBOSE_EX, VerboseFormatter),
 ])
 def test_create_logger_sets_level_and_formatter(level, expected_level, formatter_cls):
-    logger = create_logger(name=f"nios_test.unit.level_{level}", level=level)
+    logger = create_logger(name=f"dominion.unit.level_{level}", level=level)
     # The logger itself stays maximally permissive (VERBOSE_EX) so a file
     # handler can always capture full detail regardless of console
     # verbosity -- the requested `level` is enforced by the console
@@ -62,13 +62,13 @@ def test_create_logger_sets_level_and_formatter(level, expected_level, formatter
 
 
 def test_create_logger_off_level_is_above_critical():
-    logger = create_logger(name="nios_test.unit.off", level="off")
+    logger = create_logger(name="dominion.unit.off", level="off")
     assert logger.handlers[0].level > logging.CRITICAL
 
 
 def test_create_logger_with_log_file_adds_file_handler(tmp_path):
     log_file = str(tmp_path / "run.log")
-    logger = create_logger(name="nios_test.unit.with_file", level="info", log_file=log_file)
+    logger = create_logger(name="dominion.unit.with_file", level="info", log_file=log_file)
     file_handlers = [h for h in logger.handlers if isinstance(h, logging.FileHandler)]
     assert any(h.baseFilename == log_file for h in file_handlers)
 
@@ -79,8 +79,8 @@ def test_create_logger_file_handler_is_scoped_to_its_own_logger(tmp_path):
     ancestor, so records from one never fan out into the other's file."""
     log_file_a = str(tmp_path / "a.log")
     log_file_b = str(tmp_path / "b.log")
-    logger_a = create_logger(name="nios_test.unit.scope_a", level="info", log_file=log_file_a)
-    logger_b = create_logger(name="nios_test.unit.scope_b", level="info", log_file=log_file_b)
+    logger_a = create_logger(name="dominion.unit.scope_a", level="info", log_file=log_file_a)
+    logger_b = create_logger(name="dominion.unit.scope_b", level="info", log_file=log_file_b)
 
     logger_a.info("from a")
     logger_b.info("from b")
@@ -97,7 +97,7 @@ def test_create_logger_file_handler_is_scoped_to_its_own_logger(tmp_path):
 
 
 def test_create_logger_clears_previous_handlers():
-    name = "nios_test.unit.reused"
+    name = "dominion.unit.reused"
     create_logger(name=name, level="info")
     logger = create_logger(name=name, level="debug")
     assert len(logger.handlers) == 1
@@ -106,7 +106,7 @@ def test_create_logger_clears_previous_handlers():
 # -- NiosLogger.verbose / verbose_ex ---------------------------------------------
 
 def test_nioslogger_verbose_suppressed_below_threshold():
-    logger = create_logger(name="nios_test.unit.verbose_suppressed", level="info")
+    logger = create_logger(name="dominion.unit.verbose_suppressed", level="info")
     records = []
     logger.handlers[0].emit = records.append
     logger.verbose("should not appear")
@@ -114,7 +114,7 @@ def test_nioslogger_verbose_suppressed_below_threshold():
 
 
 def test_nioslogger_verbose_emitted_when_enabled():
-    logger = create_logger(name="nios_test.unit.verbose_emitted", level="verbose")
+    logger = create_logger(name="dominion.unit.verbose_emitted", level="verbose")
     records = []
     logger.handlers[0].emit = records.append
     logger.verbose("hello %s", "world")
@@ -123,7 +123,7 @@ def test_nioslogger_verbose_emitted_when_enabled():
 
 
 def test_nioslogger_verbose_ex_renders_variables():
-    logger = create_logger(name="nios_test.unit.verbose_ex_vars", level="verbose-ex")
+    logger = create_logger(name="dominion.unit.verbose_ex_vars", level="verbose-ex")
     records = []
     logger.handlers[0].emit = records.append
     logger.verbose_ex("context", variables={"a": 1, "b": "two"})

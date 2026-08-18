@@ -14,8 +14,8 @@ import pytest
 @pytest.mark.appliance
 def test_ssh_shell_echo(ssh_appliance):
     with ssh_appliance.shell_session() as shell:
-        out = shell.run("echo hello_nios_test")
-        assert "hello_nios_test" in out, f"Expected echo string, got {out!r}"
+        out = shell.run("echo hello_dominion")
+        assert "hello_dominion" in out, f"Expected echo string, got {out!r}"
 
 
 @pytest.mark.appliance
@@ -35,8 +35,8 @@ def test_ssh_console(ssh_appliance):
 @pytest.mark.appliance
 def test_ssh_shell_run_with_check_success(ssh_appliance):
     with ssh_appliance.shell_session() as shell:
-        out = shell.run_with_check("echo hello_nios_test")
-        assert "hello_nios_test" in out
+        out = shell.run_with_check("echo hello_dominion")
+        assert "hello_dominion" in out
         assert shell.last_exit_code == 0
 
 
@@ -82,8 +82,8 @@ def test_ssh_console_has_no_run_with_check(ssh_appliance):
 @pytest.mark.ncc
 def test_local_shell_echo(local_ncc_container):
     with local_ncc_container.shell_session() as shell:
-        out = shell.run("echo hello_nios_test")
-        assert "hello_nios_test" in out, f"Expected echo string, got {out!r}"
+        out = shell.run("echo hello_dominion")
+        assert "hello_dominion" in out, f"Expected echo string, got {out!r}"
 
 
 @pytest.mark.ncc
@@ -96,8 +96,8 @@ def test_local_console(local_ncc_container):
 @pytest.mark.ncc
 def test_local_shell_run_with_check_success(local_ncc_container):
     with local_ncc_container.shell_session() as shell:
-        out = shell.run_with_check("echo hello_nios_test")
-        assert "hello_nios_test" in out
+        out = shell.run_with_check("echo hello_dominion")
+        assert "hello_dominion" in out
         assert shell.last_exit_code == 0
 
 

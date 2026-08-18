@@ -10,7 +10,7 @@ import sys
 SCRIPTS_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, SCRIPTS_DIR)
 
-from nios_test import Appliance  # noqa: E402
+from dominion import Appliance  # noqa: E402
 
 log = logging.getLogger(__name__)
 

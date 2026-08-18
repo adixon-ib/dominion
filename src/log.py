@@ -45,7 +45,7 @@ class DebugFormatter(logging.Formatter):
     def format(self, record):
         if record.levelno >= logging.INFO:
             return record.getMessage()
-        return f"[nios_test] {record.getMessage()}"
+        return f"[dominion] {record.getMessage()}"
 
 
 class VerboseFormatter(logging.Formatter):
@@ -90,7 +90,7 @@ def _add_file_handler(logger: logging.Logger, log_file: str, level: str) -> None
 
 
 def create_logger(
-    name: str = "nios_test",
+    name: str = "dominion",
     level: str = "info",
     log_file: str | None = None,
 ) -> NiosLogger:

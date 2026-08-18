@@ -11,8 +11,8 @@ import logging
 
 import pytest
 
-import nios_test.src.appliance as appliance_mod
-from nios_test import (
+import dominion.src.appliance as appliance_mod
+from dominion import (
     Appliance,
     ApplianceConfig,
     LocalAppliance,
@@ -22,7 +22,7 @@ from nios_test import (
     SSHDockerTransport,
 )
 
-LOGGER = logging.getLogger("nios_test.unit_test")
+LOGGER = logging.getLogger("dominion.unit_test")
 DEFAULT_HOSTNAME = "vm-04-89"
 DEFAULT_IP = "10.35.211.4"
 DEFAULT_CONTAINER = "balerion"

@@ -1,9 +1,9 @@
-"""Run: a test-step/reporting harness for standalone nios_test scripts.
+"""Run: a test-step/reporting harness for standalone dominion scripts.
 
 For any script that drives itself directly via `python3 script.py` (ticket
 tests under scripts/tickets/*/test_*.py, one-off repro scripts, etc.) rather
 than through the integration_tests/ pytest suite. Exported from the
-top-level nios_test package. Use `from nios_test import Run`.
+top-level dominion package. Use `from dominion import Run`.
 
 Do not use this module from anything under integration_tests/ itself.
 pytest already has its own reporting (--junit-xml), and
@@ -44,10 +44,10 @@ class Run:
 
     Unlike the old module-level test()/skip()/summary() functions, a Run's
     state (counts, output directory) lives on the instance, not on the
-    nios_test module. There's nothing to race against import order: the
+    dominion module. There's nothing to race against import order: the
     output directory is resolved the moment you construct the Run, from
     whichever argument/env var/config value you pass in, not as a side
-    effect of importing nios_test.
+    effect of importing dominion.
 
     Args:
         output_dir: Base directory this run's output goes under (a
@@ -213,7 +213,7 @@ class Run:
         target = self._target(app)
 
         total_time = sum(r["duration"] for r in self._results)
-        testsuites = ET.Element("testsuites", {"name": "nios_test ticket tests"})
+        testsuites = ET.Element("testsuites", {"name": "dominion ticket tests"})
         testsuite = ET.SubElement(testsuites, "testsuite", {
             "name": self.script,
             "errors": "0",

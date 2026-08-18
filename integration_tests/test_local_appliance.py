@@ -25,7 +25,7 @@ import subprocess
 
 import pytest
 from helpers import WAPI_VERSION
-from nios_test import LocalDockerTransport
+from dominion import LocalDockerTransport
 
 pytestmark = [pytest.mark.destructive, pytest.mark.ncc]
 

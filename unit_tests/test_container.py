@@ -15,7 +15,7 @@ from contextlib import contextmanager
 
 import pytest
 
-from nios_test import (
+from dominion import (
     LocalContainerConfig,
     LocalDockerTransport,
     LocalNiosContainer,
@@ -23,7 +23,7 @@ from nios_test import (
     SSHDockerTransport,
 )
 
-LOGGER = logging.getLogger("nios_test.unit_test")
+LOGGER = logging.getLogger("dominion.unit_test")
 DEFAULT_CHROOT = "/local/91/chroots/balerion"
 
 
@@ -47,7 +47,7 @@ def test_from_config_local_creates_local_transport():
 def test_from_config_logger_name():
     cfg = LocalContainerConfig(container_name="balerion", chroot=DEFAULT_CHROOT)
     container = LocalNiosContainer.from_config(cfg)
-    assert container._logger.name == "nios_test.balerion"
+    assert container._logger.name == "dominion.balerion"
 
 
 def test_local_nios_container_repr():
@@ -87,7 +87,7 @@ def test_wait_for_wapi_raises_after_timeout(monkeypatch, fake_transport_factory)
         logger=LOGGER,
     )
 
-    import nios_test.src.container as container_mod
+    import dominion.src.container as container_mod
     monkeypatch.setattr(container_mod.time, "sleep", lambda s: None)
     monkeypatch.setattr(container_mod.time, "time", _make_fake_clock())
 
@@ -145,7 +145,7 @@ def test_console_session_builds_ssh_spawn_cmd_from_transport(monkeypatch):
         def _close(self):
             pass
 
-    import nios_test.src.container as container_mod
+    import dominion.src.container as container_mod
     monkeypatch.setattr(container_mod, "ConsoleSession", FakeConsoleSession)
 
     with c.console_session():
@@ -317,7 +317,7 @@ def test_set_network_computes_netmask_and_adds_route(monkeypatch, fake_transport
     monkeypatch.setattr(c, "_find_forwarding_bridge", lambda: "br-abc123")
     monkeypatch.setattr(c, "_wait_for_wapi", lambda timeout=None: None)
 
-    import nios_test.src.container as container_mod
+    import dominion.src.container as container_mod
     monkeypatch.setattr(container_mod.time, "sleep", lambda s: None)
 
     @contextmanager

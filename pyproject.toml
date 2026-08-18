@@ -3,7 +3,7 @@ requires = ["setuptools>=64"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "nios_test"
+name = "dominion"
 version = "0.1.0"
 description = "Deploy files to and run commands against NIOS appliances and NCC containers"
 requires-python = ">=3.10"
@@ -16,5 +16,5 @@ dependencies = [
 test = ["pytest"]
 
 [tool.setuptools]
-packages = ["nios_test", "nios_test.src"]
-package-dir = {"nios_test" = "."}
+packages = ["dominion", "dominion.src"]
+package-dir = {"dominion" = "."}

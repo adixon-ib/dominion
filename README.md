@@ -1,11 +1,11 @@
-# nios_test
+# dominion
 
 Python library for deploying files to and running commands against NIOS appliances and NCC containers. Same code works against a remote lab appliance (SSH) or a local NCC/slot container (docker exec) by swapping the config.
 
 ## Setup
 
 ```bash
-git clone <repo-url> nios_test && cd nios_test
+git clone <repo-url> dominion && cd dominion
 pip install -e .   # one time per Python env
 cp src/config.example.json src/config.json
 # edit config.json: hostname, ip, chroot, worktree, container, log_level
@@ -14,7 +14,7 @@ cp src/config.example.json src/config.json
 ## Quickstart
 
 ```python
-from nios_test import Appliance, ApplianceConfig, Run
+from dominion import Appliance, ApplianceConfig, Run
 
 run = Run()
 app = Appliance.from_config(ApplianceConfig(
@@ -46,7 +46,7 @@ Each has `shell_session()`/`console_session()` for interactive commands and name
 For standalone scripts (not part of the pytest suite):
 
 ```python
-from nios_test import Run
+from dominion import Run
 run = Run()
 run.test("my check", lambda: my_check(app))
 run.summary(app)  # prints totals, writes summary.txt + junit.xml, exits

@@ -3,7 +3,7 @@
 # No test file exists for this intentionally — builds are destructive and slow.
 # Use directly from Python or a workflow script:
 #
-#   from nios_test import NiosBuild, BuildConfig
+#   from dominion import NiosBuild, BuildConfig
 #   build = NiosBuild.from_config(BuildConfig(worktree="...", slot="balerion"))
 #   build.quick()   # touch skip_slow && make install         (~5-15 min)
 #   build.full()    # installclean + build-env + install      (~60 min)
@@ -31,7 +31,7 @@ class NiosBuild:
     @classmethod
     def from_config(cls, config: BuildConfig) -> "NiosBuild":
         logger = config.logger or create_logger(
-            name=f"nios_test.build-{config.slot}",
+            name=f"dominion.build-{config.slot}",
             level=config.log_level,
             log_file=config.log_file,
         )

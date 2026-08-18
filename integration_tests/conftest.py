@@ -1,4 +1,4 @@
-"""pytest fixtures/markers for nios_test integration tests.
+"""pytest fixtures/markers for dominion integration tests.
 
 Replaces the old test()/skip()/summary() harness. Fixtures wrap the same
 config factories and up/down checks helpers.py always had — nothing about
@@ -24,7 +24,7 @@ from helpers import (
     local_appliance_config,
     local_container_config,
 )
-from nios_test import (
+from dominion import (
     DEFAULT_RESULTS_DIR,
     Appliance,
     Defaults,
@@ -33,7 +33,7 @@ from nios_test import (
 )
 
 _defaults = Defaults.from_json()
-_RESULTS_BASE = os.environ.get("NIOS_TEST_OUTPUT_DIR", DEFAULT_RESULTS_DIR)
+_RESULTS_BASE = os.environ.get("DOMINION_OUTPUT_DIR", DEFAULT_RESULTS_DIR)
 
 NCC_DOWN_REASON = f"{_defaults.container} slot is not running"
 APPLIANCE_DOWN_REASON = f"{_defaults.hostname} is not reachable via SSH"
@@ -45,7 +45,7 @@ def pytest_addoption(parser):
     parser.addoption(
         "--target",
         action="store",
-        default=os.environ.get("NIOS_TEST_TARGET", "all"),
+        default=os.environ.get("DOMINION_TARGET", "all"),
         choices=("appliance", "ncc", "all"),
         help="Restrict to one target. Equivalent to -m appliance / -m ncc.",
     )
@@ -67,7 +67,7 @@ def pytest_configure(config):
     run_id = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     run_dir = os.path.join(_RESULTS_BASE, run_id)
     os.makedirs(run_dir, exist_ok=True)
-    config.nios_test_output_dir = run_dir
+    config.dominion_output_dir = run_dir
 
     if not config.option.xmlpath:
         config.option.xmlpath = os.path.join(run_dir, "junit.xml")
@@ -75,7 +75,7 @@ def pytest_configure(config):
 
 @pytest.fixture(scope="session")
 def output_dir(request) -> str:
-    return request.config.nios_test_output_dir
+    return request.config.dominion_output_dir
 
 
 def pytest_collection_modifyitems(config, items):

@@ -7,15 +7,15 @@ import logging
 
 import pytest
 
-from nios_test import DeployError, NiosContainer
-from nios_test.src.deploy import (
+from dominion import DeployError, NiosContainer
+from dominion.src.deploy import (
     CONSUMER_CONTROL,
     CONSUMER_DEST,
     CONSUMER_PIDFILE,
     NIOS_MODEL_CLOUDINIT_MANIFEST,
 )
 
-LOGGER = logging.getLogger("nios_test.unit_test")
+LOGGER = logging.getLogger("dominion.unit_test")
 
 
 def make_container(transport, chroot, worktree):

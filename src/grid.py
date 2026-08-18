@@ -42,7 +42,7 @@ class Grid:
     @classmethod
     def from_config(cls, config: GridConfig) -> "Grid":
         logger = config.logger or create_logger(
-            name=f"nios_test.grid-{config.member or config.gm or config.topology}",
+            name=f"dominion.grid-{config.member or config.gm or config.topology}",
             level=config.log_level,
             log_file=config.log_file,
         )

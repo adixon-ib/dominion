@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Deploy the token WAPI suite (pyabs/wapi/test files) into a running NCC container.
 
-Uses the nios_test library's LocalNiosContainer.deploy_token_py() for production
+Uses the dominion library's LocalNiosContainer.deploy_token_py() for production
 files and adds deployment of WAPI test files + shared fixtures (test_*.py,
 token_test_common.py). Also handles waiting out admin-httpd's restart (the
 process reappears in ~5s, but WAPI itself isn't actually serving again for ~45s).
@@ -19,7 +19,7 @@ import time
 
 from _common import container_from_args
 
-from nios_test import LocalNiosContainer
+from dominion import LocalNiosContainer
 
 # Test files + shared fixtures — not covered by deploy_token_py, which only
 # deploys production pyabs/wapi/ibap/branding files.

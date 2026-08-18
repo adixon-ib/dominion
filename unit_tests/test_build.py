@@ -11,8 +11,8 @@ from unittest.mock import Mock
 
 import pytest
 
-import nios_test.src.build as build_mod
-from nios_test import BuildConfig, NiosBuild
+import dominion.src.build as build_mod
+from dominion import BuildConfig, NiosBuild
 
 
 class FakeProc:

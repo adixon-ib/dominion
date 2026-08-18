@@ -8,7 +8,7 @@ import subprocess
 
 import pytest
 
-from nios_test import (
+from dominion import (
     CommandError,
     LocalDockerTransport,
     SSHDockerTransport,
@@ -37,7 +37,7 @@ def _install_fake_run(monkeypatch, module, returncode=0, stdout="", stderr=""):
 # -- SSHDockerTransport ----------------------------------------------------------
 
 def test_ssh_run_builds_docker_exec_over_ssh(monkeypatch):
-    import nios_test.src.transport as transport_mod
+    import dominion.src.transport as transport_mod
     calls = _install_fake_run(monkeypatch, transport_mod, stdout="myhost\n")
     t = SSHDockerTransport(host="10.35.211.4", container_name="nios")
 
@@ -51,7 +51,7 @@ def test_ssh_run_builds_docker_exec_over_ssh(monkeypatch):
 
 
 def test_ssh_run_on_host_skips_docker_exec(monkeypatch):
-    import nios_test.src.transport as transport_mod
+    import dominion.src.transport as transport_mod
     calls = _install_fake_run(monkeypatch, transport_mod, stdout="ok\n")
     t = SSHDockerTransport(host="10.35.211.4")
 
@@ -61,7 +61,7 @@ def test_ssh_run_on_host_skips_docker_exec(monkeypatch):
 
 
 def test_ssh_run_raises_command_error_on_nonzero_exit(monkeypatch):
-    import nios_test.src.transport as transport_mod
+    import dominion.src.transport as transport_mod
     _install_fake_run(monkeypatch, transport_mod, returncode=1, stderr="boom")
     t = SSHDockerTransport(host="10.35.211.4")
 
@@ -72,7 +72,7 @@ def test_ssh_run_raises_command_error_on_nonzero_exit(monkeypatch):
 
 
 def test_ssh_run_check_false_returns_nonzero_without_raising(monkeypatch):
-    import nios_test.src.transport as transport_mod
+    import dominion.src.transport as transport_mod
     _install_fake_run(monkeypatch, transport_mod, returncode=1, stderr="boom")
     t = SSHDockerTransport(host="10.35.211.4")
 
@@ -99,7 +99,7 @@ def test_ssh_build_exec_cmd_with_tty_inserts_tt():
 
 
 def test_ssh_checksum_parses_md5sum_output(monkeypatch):
-    import nios_test.src.transport as transport_mod
+    import dominion.src.transport as transport_mod
     _install_fake_run(
         monkeypatch, transport_mod,
         stdout="deadbeef00112233445566778899aabb  /etc/hostname\n",
@@ -110,7 +110,7 @@ def test_ssh_checksum_parses_md5sum_output(monkeypatch):
 
 
 def test_ssh_is_container_running_true(monkeypatch):
-    import nios_test.src.transport as transport_mod
+    import dominion.src.transport as transport_mod
     _install_fake_run(monkeypatch, transport_mod, stdout="true\n")
     t = SSHDockerTransport(host="10.35.211.4")
 
@@ -118,7 +118,7 @@ def test_ssh_is_container_running_true(monkeypatch):
 
 
 def test_ssh_is_container_running_false_on_nonzero_exit(monkeypatch):
-    import nios_test.src.transport as transport_mod
+    import dominion.src.transport as transport_mod
     _install_fake_run(monkeypatch, transport_mod, returncode=1, stdout="")
     t = SSHDockerTransport(host="10.35.211.4")
 
@@ -126,7 +126,7 @@ def test_ssh_is_container_running_false_on_nonzero_exit(monkeypatch):
 
 
 def test_ssh_exec_translates_timeout_to_transport_error(monkeypatch):
-    import nios_test.src.transport as transport_mod
+    import dominion.src.transport as transport_mod
 
     def fake_run(argv, **kwargs):
         raise subprocess.TimeoutExpired(cmd=argv, timeout=1)
@@ -139,7 +139,7 @@ def test_ssh_exec_translates_timeout_to_transport_error(monkeypatch):
 
 
 def test_ssh_upload_scps_then_docker_cps_then_cleans_up(monkeypatch, tmp_path):
-    import nios_test.src.transport as transport_mod
+    import dominion.src.transport as transport_mod
     local = tmp_path / "file.py"
     local.write_text("content")
     calls = _install_fake_run(monkeypatch, transport_mod)
@@ -153,7 +153,7 @@ def test_ssh_upload_scps_then_docker_cps_then_cleans_up(monkeypatch, tmp_path):
 
 
 def test_ssh_upload_falls_back_to_tee_when_docker_cp_fails(monkeypatch, tmp_path):
-    import nios_test.src.transport as transport_mod
+    import dominion.src.transport as transport_mod
     local = tmp_path / "file.py"
     local.write_text("content")
     calls = []
@@ -193,7 +193,7 @@ def test_local_build_exec_cmd_returns_cmd_unchanged():
 
 
 def test_local_run_builds_docker_exec_bash_c(monkeypatch):
-    import nios_test.src.transport as transport_mod
+    import dominion.src.transport as transport_mod
     calls = _install_fake_run(monkeypatch, transport_mod, stdout=b"myhost\n")
     t = LocalDockerTransport(container_name="balerion")
 
@@ -205,7 +205,7 @@ def test_local_run_builds_docker_exec_bash_c(monkeypatch):
 
 
 def test_local_run_on_host_uses_shlex_split(monkeypatch):
-    import nios_test.src.transport as transport_mod
+    import dominion.src.transport as transport_mod
     calls = _install_fake_run(monkeypatch, transport_mod, stdout=b"")
     t = LocalDockerTransport(container_name="balerion")
 
@@ -215,7 +215,7 @@ def test_local_run_on_host_uses_shlex_split(monkeypatch):
 
 
 def test_local_run_raises_command_error_on_nonzero_exit(monkeypatch):
-    import nios_test.src.transport as transport_mod
+    import dominion.src.transport as transport_mod
     _install_fake_run(
         monkeypatch, transport_mod, returncode=1, stdout=b"", stderr=b"boom",
     )
@@ -226,7 +226,7 @@ def test_local_run_raises_command_error_on_nonzero_exit(monkeypatch):
 
 
 def test_local_upload_pipes_file_bytes_via_tee(monkeypatch, tmp_path):
-    import nios_test.src.transport as transport_mod
+    import dominion.src.transport as transport_mod
     local = tmp_path / "file.py"
     local.write_text("hello")
     captured = {}
@@ -258,7 +258,7 @@ def test_local_host_checksum_reads_real_file(tmp_path):
 
 
 def test_local_checksum_parses_md5sum_output(monkeypatch):
-    import nios_test.src.transport as transport_mod
+    import dominion.src.transport as transport_mod
     _install_fake_run(
         monkeypatch, transport_mod,
         stdout=b"cafebabe00112233445566778899aabb  /etc/hostname\n",
