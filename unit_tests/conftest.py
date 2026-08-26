@@ -69,7 +69,7 @@ class FakeTransport:
                 return resp
         return self.default_response
 
-    def run(self, cmd: str, check: bool = True) -> tuple[int, str, str]:
+    def run(self, cmd: str, check: bool = True, **kwargs) -> tuple[int, str, str]:
         self.calls.append(("run", cmd))
         m = self._MD5SUM_RE.match(cmd)
         if m and m.group(1) in self.uploaded_content:
@@ -85,7 +85,7 @@ class FakeTransport:
             raise CommandError(cmd=cmd, exit_code=rc, stdout=out, stderr=err)
         return rc, out, err
 
-    def run_on_host(self, cmd: str, check: bool = True) -> tuple[int, str, str]:
+    def run_on_host(self, cmd: str, check: bool = True, **kwargs) -> tuple[int, str, str]:
         self.calls.append(("run_on_host", cmd))
         for m in self._CP_RE.finditer(cmd):
             src, dst = m.group(1), m.group(2)

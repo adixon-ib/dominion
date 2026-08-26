@@ -39,14 +39,34 @@ class _BaseTransport:
         self.timeout = timeout
         self._logger = logger or log
 
+    def _summarize(self, argv: list[str]) -> str:
+        return argv[0] if argv else "<empty>"
+
+    def _log_command(self, argv, stdout, stderr, returncode, quiet):
+        # Info: terse command + stdout. Debug: full argv + exit/stdout/stderr.
+        # quiet=True demotes the info lines to debug (used for internal
+        # housekeeping commands like iptables setup that aren't worth surfacing).
+        if quiet:
+            self._logger.debug("%s", self._summarize(argv))
+        else:
+            self._logger.info("%s", self._summarize(argv))
+            if stdout.strip():
+                self._logger.info("%s", stdout.strip())
+        self._logger.debug("%s", " ".join(argv))
+        self._logger.debug("  exit=%d", returncode)
+        if stdout.strip():
+            self._logger.debug("  stdout=%s", stdout.strip())
+        if stderr.strip():
+            self._logger.debug("  stderr=%s", stderr.strip())
+
     def _exec(
         self,
         argv: list[str],
         check: bool = True,
         stdin_data: bytes | None = None,
         timeout: int | None = None,
+        quiet: bool = False,
     ) -> tuple[int, str, str]:
-        self._logger.debug("Running: %s", " ".join(argv))
         try:
             result = subprocess.run(
                 argv,
@@ -64,9 +84,7 @@ class _BaseTransport:
         stdout = result.stdout.decode(errors="replace") if isinstance(result.stdout, bytes) else result.stdout
         stderr = result.stderr.decode(errors="replace") if isinstance(result.stderr, bytes) else result.stderr
 
-        self._logger.debug("  exit=%d stdout=%s", result.returncode, stdout.strip()[:200] or "(empty)")
-        if stderr.strip():
-            self._logger.debug("  stderr=%s", stderr.strip()[:200])
+        self._log_command(argv, stdout, stderr, result.returncode, quiet)
 
         if check and result.returncode != 0:
             raise CommandError(
@@ -117,6 +135,20 @@ class SSHDockerTransport(_BaseTransport):
         self.key_path = key_path
         self.port = port
 
+    def _summarize(self, argv: list[str]) -> str:
+        parts = []
+        skip_next = False
+        for arg in argv:
+            if skip_next:
+                skip_next = False
+                continue
+            if arg.startswith("-"):
+                if arg in ("-o", "-i", "-p", "-P"):
+                    skip_next = True
+                continue
+            parts.append(arg)
+        return " ".join(parts)
+
     def build_exec_cmd(self, cmd: str, tty: bool = False) -> str:
         """Wrap cmd so it runs on this host over SSH.
 
@@ -148,16 +180,17 @@ class SSHDockerTransport(_BaseTransport):
             cmd += ["-i", self.key_path]
         return cmd
 
-    def run(self, cmd: str, check: bool = True) -> tuple[int, str, str]:
+    def run(self, cmd: str, check: bool = True, quiet: bool = False) -> tuple[int, str, str]:
         docker_cmd = f"docker exec {self.container_name} {cmd}"
         argv = self._ssh_base + [docker_cmd]
-        return self._exec(argv, check=check)
+        return self._exec(argv, check=check, quiet=quiet)
 
-    def run_on_host(self, cmd: str, check: bool = True) -> tuple[int, str, str]:
+    def run_on_host(self, cmd: str, check: bool = True, quiet: bool = False) -> tuple[int, str, str]:
         argv = self._ssh_base + [cmd]
-        return self._exec(argv, check=check)
+        return self._exec(argv, check=check, quiet=quiet)
 
     def upload(self, local_path: str, remote_path: str) -> None:
+        """Put a file inside the NIOS container (Python files, configs)."""
         local = Path(local_path)
         if not local.is_file():
             raise TransportError(f"Local file not found: {local_path}")
@@ -189,6 +222,7 @@ class SSHDockerTransport(_BaseTransport):
         self.run_on_host(f"rm -f {host_tmp}", check=False)
 
     def upload_to_host(self, local_path: str, remote_path: str) -> None:
+        """Put a file on the host filesystem, outside the container (binaries, .so)."""
         local = Path(local_path)
         if not local.is_file():
             raise TransportError(f"Local file not found: {local_path}")
@@ -206,29 +240,43 @@ class SSHDockerTransport(_BaseTransport):
 
 class LocalDockerTransport(_BaseTransport):
 
+    def _summarize(self, argv: list[str]) -> str:
+        if len(argv) > 2 and argv[0] == "docker" and argv[1] == "exec":
+            i = 2
+            while i < len(argv) and argv[i].startswith("-"):
+                i += 1
+            container = argv[i] if i < len(argv) else "?"
+            cmd_parts = argv[i + 1:]
+            if len(cmd_parts) >= 3 and cmd_parts[0] == "bash" and cmd_parts[1] == "-c":
+                return f"docker@{container}: {cmd_parts[2]}"
+            return f"docker@{container}: {' '.join(cmd_parts)}"
+        return " ".join(argv)
+
     def build_exec_cmd(self, cmd: str, tty: bool = False) -> str:
         """No SSH hop needed. cmd already targets the local Docker daemon."""
         return cmd
 
-    def run(self, cmd: str, check: bool = True) -> tuple[int, str, str]:
+    def run(self, cmd: str, check: bool = True, quiet: bool = False) -> tuple[int, str, str]:
         argv = ["docker", "exec", self.container_name, "bash", "-c", cmd]
-        return self._exec(argv, check=check)
+        return self._exec(argv, check=check, quiet=quiet)
 
-    def run_on_host(self, cmd: str, check: bool = True) -> tuple[int, str, str]:
+    def run_on_host(self, cmd: str, check: bool = True, quiet: bool = False) -> tuple[int, str, str]:
         argv = shlex.split(cmd)
-        return self._exec(argv, check=check)
+        return self._exec(argv, check=check, quiet=quiet)
 
     def upload(self, local_path: str, remote_path: str) -> None:
+        """Put a file inside the NIOS container (Python files, configs)."""
         local = Path(local_path)
         if not local.is_file():
             raise TransportError(f"Local file not found: {local_path}")
 
         self._logger.debug("Uploading %s → container:%s (cat|tee)", local_path, remote_path)
         file_data = local.read_bytes()
-        argv = ["docker", "exec", "-i", self.container_name, "tee", remote_path]
+        argv = ["docker", "exec", "-i", self.container_name, "bash", "-c", f"tee {remote_path} > /dev/null"]
         self._exec(argv, stdin_data=file_data)
 
     def upload_to_host(self, local_path: str, remote_path: str) -> None:
+        """Put a file on the host filesystem, outside the container (binaries, .so)."""
         local = Path(local_path)
         if not local.is_file():
             raise TransportError(f"Local file not found: {local_path}")

@@ -242,7 +242,8 @@ def test_local_upload_pipes_file_bytes_via_tee(monkeypatch, tmp_path):
     t.upload(str(local), "/infoblox/one/lib/python/file.py")
 
     assert captured["argv"] == [
-        "docker", "exec", "-i", "balerion", "tee", "/infoblox/one/lib/python/file.py",
+        "docker", "exec", "-i", "balerion", "bash", "-c",
+        "tee /infoblox/one/lib/python/file.py > /dev/null",
     ]
     assert captured["input"] == b"hello"
 
@@ -266,6 +267,66 @@ def test_local_checksum_parses_md5sum_output(monkeypatch):
     t = LocalDockerTransport(container_name="balerion")
 
     assert t.checksum("/etc/hostname") == "cafebabe00112233445566778899aabb"
+
+
+# -- _summarize() -----------------------------------------------------------------
+
+def test_ssh_summarize_run_shows_full_remote_cmd():
+    t = SSHDockerTransport(host="10.35.211.4", container_name="nios")
+    argv = [
+        "ssh", "-o", "StrictHostKeyChecking=no", "-o", "LogLevel=ERROR",
+        "-o", "ConnectTimeout=10", "root@10.35.211.4",
+        "docker exec nios pgrep -f token",
+    ]
+    assert t._summarize(argv) == "ssh root@10.35.211.4 docker exec nios pgrep -f token"
+
+
+def test_ssh_summarize_run_on_host():
+    t = SSHDockerTransport(host="10.35.211.4", container_name="nios")
+    argv = [
+        "ssh", "-o", "StrictHostKeyChecking=no", "-o", "LogLevel=ERROR",
+        "-o", "ConnectTimeout=10", "root@10.35.211.4",
+        "docker inspect --format='{{.State.Running}}' nios",
+    ]
+    assert t._summarize(argv) == "ssh root@10.35.211.4 docker inspect --format='{{.State.Running}}' nios"
+
+
+def test_ssh_summarize_strips_key_path():
+    t = SSHDockerTransport(host="10.35.211.4", container_name="nios", key_path="~/.ssh/id_rsa")
+    argv = [
+        "ssh", "-o", "StrictHostKeyChecking=no", "-o", "LogLevel=ERROR",
+        "-o", "ConnectTimeout=10", "-i", "~/.ssh/id_rsa", "root@10.35.211.4",
+        "docker exec nios hostname",
+    ]
+    assert t._summarize(argv) == "ssh root@10.35.211.4 docker exec nios hostname"
+
+
+def test_ssh_summarize_scp():
+    t = SSHDockerTransport(host="10.35.211.4", container_name="nios")
+    argv = [
+        "scp", "-o", "StrictHostKeyChecking=no", "-o", "LogLevel=ERROR",
+        "-o", "ConnectTimeout=10",
+        "/local/path/token_branding.py", "root@10.35.211.4:/tmp/token_branding.py",
+    ]
+    assert t._summarize(argv) == "scp /local/path/token_branding.py root@10.35.211.4:/tmp/token_branding.py"
+
+
+def test_local_summarize_run():
+    t = LocalDockerTransport(container_name="balerion")
+    argv = ["docker", "exec", "balerion", "bash", "-c", "pgrep -f token"]
+    assert t._summarize(argv) == "docker@balerion: pgrep -f token"
+
+
+def test_local_summarize_upload():
+    t = LocalDockerTransport(container_name="balerion")
+    argv = ["docker", "exec", "-i", "balerion", "bash", "-c", "tee /infoblox/one/lib/python/file.py > /dev/null"]
+    assert t._summarize(argv) == "docker@balerion: tee /infoblox/one/lib/python/file.py > /dev/null"
+
+
+def test_local_summarize_run_on_host():
+    t = LocalDockerTransport(container_name="balerion")
+    argv = ["docker", "ps", "-a"]
+    assert t._summarize(argv) == "docker ps -a"
 
 
 # -- CommandError -----------------------------------------------------------------
