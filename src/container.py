@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import shlex
 import time
 from contextlib import contextmanager
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from .config import LocalContainerConfig
@@ -14,7 +16,7 @@ from .constants import (
     WAPI_VERSION,
 )
 from .deploy import DeployMixin
-from .log import create_logger
+from .log import LogDump, LogMark, create_logger
 from .network import LocalNetworkMixin
 from .session import ShellSession, ConsoleSession
 from .transport import LocalDockerTransport
@@ -171,6 +173,75 @@ class NiosContainer(DeployMixin):
         self._logger.info("Network configured — waiting %ds for NIOS reboot", reboot_timeout)
         time.sleep(reboot_timeout)
         return ip
+
+    INFOBLOX_LOG = "/infoblox/var/infoblox.log"
+
+    def mark_log(self, log_path: str) -> LogMark:
+        _, stdout, _ = self._transport.run(f"wc -l {shlex.quote(log_path)}")
+        line_count = int(stdout.strip().split()[0])
+        return LogMark(log_path=log_path, line_count=line_count)
+
+    def mark_infoblox_log(self) -> LogMark:
+        return self.mark_log(self.INFOBLOX_LOG)
+
+    def _build_log_cmd(
+        self, log_path: str, since: LogMark | None, grep: str | None,
+    ) -> str:
+        if since is not None:
+            cmd = f"tail -n +{since.line_count + 1} {shlex.quote(log_path)}"
+        else:
+            cmd = f"cat {shlex.quote(log_path)}"
+        if grep is not None:
+            cmd += f" | grep -- {shlex.quote(grep)}"
+        return cmd
+
+    def dump_log(
+        self,
+        log_path: str,
+        *,
+        dest: str | Path,
+        since: LogMark | None = None,
+        grep: str | None = None,
+    ) -> LogDump:
+        dest = Path(dest)
+        if dest.is_dir() or (not dest.suffix and not dest.exists()):
+            dest.mkdir(parents=True, exist_ok=True)
+            dest = dest / Path(log_path).name
+        cmd = self._build_log_cmd(log_path, since, grep)
+        _, stdout, _ = self._transport.run(cmd, check=False)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_text(stdout)
+        self._logger.info("Log dumped to %s (%d bytes)", dest, len(stdout))
+        return LogDump(path=dest, text=stdout)
+
+    def dump_infoblox_log(
+        self,
+        *,
+        dest: str | Path,
+        since: LogMark | None = None,
+        grep: str | None = None,
+    ) -> LogDump:
+        return self.dump_log(self.INFOBLOX_LOG, dest=dest, since=since, grep=grep)
+
+    def count_log(
+        self,
+        log_path: str,
+        pattern: str,
+        *,
+        since: LogMark | None = None,
+    ) -> int:
+        cmd = self._build_log_cmd(log_path, since, grep=None)
+        cmd += f" | grep -c -- {shlex.quote(pattern)}"
+        _, stdout, _ = self._transport.run(cmd, check=False)
+        return int(stdout.strip() or 0)
+
+    def count_infoblox_log(
+        self,
+        pattern: str,
+        *,
+        since: LogMark | None = None,
+    ) -> int:
+        return self.count_log(self.INFOBLOX_LOG, pattern, since=since)
 
     def __repr__(self) -> str:
         return f"NiosContainer({self.container_name!r})"

@@ -3,6 +3,8 @@ from __future__ import annotations
 import logging
 import os
 import sys
+from dataclasses import dataclass
+from pathlib import Path
 
 VERBOSE = 8
 
@@ -24,6 +26,26 @@ class NiosLogger(logging.Logger):
 
 
 logging.setLoggerClass(NiosLogger)
+
+
+@dataclass
+class LogMark:
+    log_path: str
+    line_count: int
+
+
+@dataclass
+class LogDump:
+    path: Path
+    text: str
+
+    @property
+    def lines(self) -> list[str]:
+        return self.text.splitlines()
+
+    @property
+    def line_count(self) -> int:
+        return len(self.lines)
 
 
 class InfoFormatter(logging.Formatter):

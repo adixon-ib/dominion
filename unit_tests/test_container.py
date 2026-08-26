@@ -333,3 +333,216 @@ def test_set_network_computes_netmask_and_adds_route(monkeypatch, fake_transport
     assert any(
         "ip route replace 172.20.0.5/32 dev br-abc123" in cmd for cmd in host_cmds
     )
+
+
+# -- mark_log / dump_log -----------------------------------------------------------
+
+def test_mark_log_parses_wc_output(fake_transport_factory):
+    transport = fake_transport_factory(
+        responses={"wc -l": (0, "  1234 /infoblox/var/infoblox.log\n", "")},
+    )
+    c = NiosContainer(
+        container_name="nios",
+        transport=transport,
+        chroot=DEFAULT_CHROOT,
+        logger=LOGGER,
+    )
+    mark = c.mark_log("/infoblox/var/infoblox.log")
+    assert mark.log_path == "/infoblox/var/infoblox.log"
+    assert mark.line_count == 1234
+
+
+def test_mark_infoblox_log_uses_default_path(fake_transport_factory):
+    transport = fake_transport_factory(
+        responses={"wc -l": (0, "500 /infoblox/var/infoblox.log\n", "")},
+    )
+    c = NiosContainer(
+        container_name="nios",
+        transport=transport,
+        chroot=DEFAULT_CHROOT,
+        logger=LOGGER,
+    )
+    mark = c.mark_infoblox_log()
+    assert mark.log_path == "/infoblox/var/infoblox.log"
+    assert mark.line_count == 500
+
+
+def test_dump_log_full_file(fake_transport_factory, tmp_path):
+    transport = fake_transport_factory(
+        responses={"cat": (0, "line1\nline2\nline3\n", "")},
+    )
+    c = NiosContainer(
+        container_name="nios",
+        transport=transport,
+        chroot=DEFAULT_CHROOT,
+        logger=LOGGER,
+    )
+    dest = tmp_path / "out.log"
+    result = c.dump_log("/infoblox/var/infoblox.log", dest=dest)
+    assert result.path == dest
+    assert result.text == "line1\nline2\nline3\n"
+    assert result.lines == ["line1", "line2", "line3"]
+    assert result.line_count == 3
+    assert dest.read_text() == "line1\nline2\nline3\n"
+    run_cmds = [call[1] for call in transport.calls if call[0] == "run"]
+    assert any("cat" in cmd and "infoblox.log" in cmd for cmd in run_cmds)
+
+
+def test_dump_log_with_since(fake_transport_factory, tmp_path):
+    from dominion.src.log import LogMark
+
+    transport = fake_transport_factory(
+        responses={"tail": (0, "new line\n", "")},
+    )
+    c = NiosContainer(
+        container_name="nios",
+        transport=transport,
+        chroot=DEFAULT_CHROOT,
+        logger=LOGGER,
+    )
+    mark = LogMark(log_path="/infoblox/var/infoblox.log", line_count=100)
+    dest = tmp_path / "out.log"
+    c.dump_log("/infoblox/var/infoblox.log", dest=dest, since=mark)
+    run_cmds = [call[1] for call in transport.calls if call[0] == "run"]
+    assert any("tail -n +101" in cmd for cmd in run_cmds)
+
+
+def test_dump_log_with_grep(fake_transport_factory, tmp_path):
+    transport = fake_transport_factory(
+        responses={"cat": (0, "matched line\n", "")},
+    )
+    c = NiosContainer(
+        container_name="nios",
+        transport=transport,
+        chroot=DEFAULT_CHROOT,
+        logger=LOGGER,
+    )
+    dest = tmp_path / "out.log"
+    c.dump_log("/var/log/syslog", dest=dest, grep="ERROR")
+    run_cmds = [call[1] for call in transport.calls if call[0] == "run"]
+    assert any("grep" in cmd and "ERROR" in cmd for cmd in run_cmds)
+
+
+def test_dump_log_creates_parent_dirs(fake_transport_factory, tmp_path):
+    transport = fake_transport_factory(
+        responses={"cat": (0, "content\n", "")},
+    )
+    c = NiosContainer(
+        container_name="nios",
+        transport=transport,
+        chroot=DEFAULT_CHROOT,
+        logger=LOGGER,
+    )
+    dest = tmp_path / "nested" / "dir" / "out.log"
+    c.dump_log("/infoblox/var/infoblox.log", dest=dest)
+    assert dest.exists()
+
+
+def test_dump_log_dest_directory_uses_log_basename(fake_transport_factory, tmp_path):
+    transport = fake_transport_factory(
+        responses={"cat": (0, "dir content\n", "")},
+    )
+    c = NiosContainer(
+        container_name="nios",
+        transport=transport,
+        chroot=DEFAULT_CHROOT,
+        logger=LOGGER,
+    )
+    result = c.dump_log("/infoblox/var/infoblox.log", dest=tmp_path)
+    assert result.path == tmp_path / "infoblox.log"
+    assert result.text == "dir content\n"
+
+
+def test_dump_log_dest_new_directory_auto_creates(fake_transport_factory, tmp_path):
+    transport = fake_transport_factory(
+        responses={"cat": (0, "new dir\n", "")},
+    )
+    c = NiosContainer(
+        container_name="nios",
+        transport=transport,
+        chroot=DEFAULT_CHROOT,
+        logger=LOGGER,
+    )
+    dest = tmp_path / "2026-08-26_14-30-00"
+    result = c.dump_log("/var/log/syslog", dest=dest)
+    assert result.path == dest / "syslog"
+    assert result.text == "new dir\n"
+
+
+def test_dump_infoblox_log_delegates(fake_transport_factory, tmp_path):
+    transport = fake_transport_factory(
+        responses={"cat": (0, "log content\n", "")},
+    )
+    c = NiosContainer(
+        container_name="nios",
+        transport=transport,
+        chroot=DEFAULT_CHROOT,
+        logger=LOGGER,
+    )
+    dest = tmp_path / "infoblox.log"
+    result = c.dump_infoblox_log(dest=dest)
+    assert result.path == dest
+    assert result.text == "log content\n"
+
+
+# -- count_log / count_infoblox_log -----------------------------------------------
+
+def test_count_log_returns_match_count(fake_transport_factory):
+    transport = fake_transport_factory(
+        responses={"grep -c": (0, "7\n", "")},
+    )
+    c = NiosContainer(
+        container_name="nios",
+        transport=transport,
+        chroot=DEFAULT_CHROOT,
+        logger=LOGGER,
+    )
+    count = c.count_log("/infoblox/var/infoblox.log", "ERROR")
+    assert count == 7
+    run_cmds = [call[1] for call in transport.calls if call[0] == "run"]
+    assert any("grep -c" in cmd and "ERROR" in cmd for cmd in run_cmds)
+
+
+def test_count_log_with_since(fake_transport_factory):
+    from dominion.src.log import LogMark
+
+    transport = fake_transport_factory(
+        responses={"grep -c": (0, "3\n", "")},
+    )
+    c = NiosContainer(
+        container_name="nios",
+        transport=transport,
+        chroot=DEFAULT_CHROOT,
+        logger=LOGGER,
+    )
+    mark = LogMark(log_path="/infoblox/var/infoblox.log", line_count=50)
+    count = c.count_log("/infoblox/var/infoblox.log", "token", since=mark)
+    assert count == 3
+    run_cmds = [call[1] for call in transport.calls if call[0] == "run"]
+    assert any("tail -n +51" in cmd and "grep -c" in cmd for cmd in run_cmds)
+
+
+def test_count_log_zero_matches(fake_transport_factory):
+    transport = fake_transport_factory(
+        responses={"grep -c": (1, "0\n", "")},
+    )
+    c = NiosContainer(
+        container_name="nios",
+        transport=transport,
+        chroot=DEFAULT_CHROOT,
+        logger=LOGGER,
+    )
+    assert c.count_log("/infoblox/var/infoblox.log", "NONEXISTENT") == 0
+
+
+def test_count_infoblox_log_delegates(fake_transport_factory):
+    transport = fake_transport_factory(
+        responses={"grep -c": (0, "12\n", "")},
+    )
+    c = NiosContainer(
+        container_name="nios",
+        transport=transport,
+        chroot=DEFAULT_CHROOT,
+        logger=LOGGER,
+    )
+    assert c.count_infoblox_log("token") == 12

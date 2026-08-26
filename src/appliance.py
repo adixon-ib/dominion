@@ -16,7 +16,7 @@ from .constants import (
     WAPI_VERSION,
 )
 from .container import NiosContainer, LocalNiosContainer
-from .log import create_logger
+from .log import LogDump, LogMark, create_logger
 from .transport import LocalDockerTransport, SSHDockerTransport
 from .wapi import WapiClient
 
@@ -88,6 +88,24 @@ class _ApplianceBase:
 
     def deploy_nios_model_cloud_init(self) -> DeployResult:
         return self.container.deploy_nios_model_cloud_init()
+
+    def mark_log(self, log_path: str) -> LogMark:
+        return self.container.mark_log(log_path)
+
+    def mark_infoblox_log(self) -> LogMark:
+        return self.container.mark_infoblox_log()
+
+    def dump_log(self, log_path: str, **kwargs) -> LogDump:
+        return self.container.dump_log(log_path, **kwargs)
+
+    def dump_infoblox_log(self, **kwargs) -> LogDump:
+        return self.container.dump_infoblox_log(**kwargs)
+
+    def count_log(self, log_path: str, pattern: str, **kwargs) -> int:
+        return self.container.count_log(log_path, pattern, **kwargs)
+
+    def count_infoblox_log(self, pattern: str, **kwargs) -> int:
+        return self.container.count_infoblox_log(pattern, **kwargs)
 
     def revert(self, timeout: int = NIOS_REBOOT_TIMEOUT) -> None:
         """Restart the nios container, discarding hot-deployed files and

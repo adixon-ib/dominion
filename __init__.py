@@ -23,7 +23,7 @@ from .src.container import LocalNiosContainer, NiosContainer
 from .src.deploy import DeployError, DeployResult
 from .src.grid import Grid
 from .src.harness import Run, resolve_ip_from_argv
-from .src.log import create_logger, resolve_log_file
+from .src.log import LogDump, LogMark, create_logger, resolve_log_file
 from .src.session import ConsoleSession, ShellSession
 from .src.transport import (
     CommandError,
@@ -53,6 +53,8 @@ __all__ = [
     "DeployResult",
     "Grid",
     "GridConfig",
+    "LogDump",
+    "LogMark",
     "LocalAppliance",
     "LocalApplianceConfig",
     "LocalContainerConfig",
