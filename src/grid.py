@@ -58,7 +58,7 @@ class Grid:
             bufsize=1,
         )
         for line in proc.stdout:
-            logger.info(line.rstrip())
+            logger.debug(line.rstrip())
         proc.wait()
 
         if proc.returncode != 0:

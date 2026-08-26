@@ -158,6 +158,7 @@ class DeployMixin:
 
         pre_hash = self._transport.host_checksum(dest)
         local_h = self._local_md5(local_path)
+        self._logger.debug("pre_hash=%s local_hash=%s", pre_hash, local_h)
 
         # SCP to host /tmp/, then host-level cp into place
         # /infoblox/ is accessible from the host on NIOS appliances
@@ -210,6 +211,7 @@ class DeployMixin:
 
         pre_hash = self._transport.host_checksum(dest)
         local_h = self._local_md5(local_path)
+        self._logger.debug("pre_hash=%s local_hash=%s", pre_hash, local_h)
 
         self._transport.upload_to_host(local_path, staging)
 
@@ -258,6 +260,7 @@ class DeployMixin:
 
         pre_hash = self._transport.host_checksum(dest)
         local_h = self._local_md5(local_path)
+        self._logger.debug("pre_hash=%s local_hash=%s", pre_hash, local_h)
 
         self._transport.upload_to_host(local_path, staging)
 
@@ -350,9 +353,12 @@ class DeployMixin:
                 "No files in manifest were found on disk", artifact="token_py"
             )
 
+        self._logger.debug("Manifest: %d files from groups %s", len(manifest), sorted(groups))
+
         file_results = []
         for local_path, dest in manifest:
             local_h = self._local_md5(local_path)
+            self._logger.debug("Deploying %s → %s", os.path.basename(local_path), dest)
             self._transport.upload(local_path, dest)
             self._clean_pycache(dest)
 

@@ -33,6 +33,7 @@ class LocalNetworkMixin:
         prefix = int(net["IPPrefixLen"])
         if not ip:
             raise RuntimeError(f"ncc_lan1 has no IP on {self.container_name}")
+        self._logger.debug("Container network: ip=%s prefix=%d", ip, prefix)
         return ip, prefix
 
     def get_container_ip(self) -> str:
@@ -63,7 +64,9 @@ class LocalNetworkMixin:
             _, bridge_out, _ = self._transport.run_on_host(
                 f"bridge link show dev {veth}", check=False
             )
-            if "state forwarding" not in bridge_out:
+            forwarding = "state forwarding" in bridge_out
+            self._logger.debug("Checking veth %s (forwarding=%s)", veth, forwarding)
+            if not forwarding:
                 continue
 
             _, link_out, _ = self._transport.run_on_host(
@@ -91,6 +94,7 @@ class LocalNetworkMixin:
             ip, prefix = self._get_container_network()
             netmask = {16: "255.255.0.0", 24: "255.255.255.0"}.get(prefix, "255.255.0.0")
             gateway = ip.rsplit(".", 1)[0] + ".1"
+            self._logger.debug("Auto-discovered: ip=%s netmask=%s gateway=%s", ip, netmask, gateway)
 
         super().set_network(ip, netmask, gateway, reboot_timeout)
 

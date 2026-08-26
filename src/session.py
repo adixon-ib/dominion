@@ -143,6 +143,7 @@ class BaseSession:
         after = self._child.after or ""
         output = before + after
         self._last_prompt = _ANSI_RE.sub("", after).strip()
+        self._logger.verbose("Matched %r after %d bytes", pattern, len(before))
         return output
 
     def expect_one_of(self, patterns: list[str], timeout: float | None = None) -> int:
@@ -178,6 +179,7 @@ class BaseSession:
             raise RuntimeError(f"Process exited unexpectedly. Received: {received!r}")
         after = self._child.after or ""
         self._last_prompt = _ANSI_RE.sub("", after).strip()
+        self._logger.verbose("Matched index %d of %r after %d bytes", idx, patterns, len(self._child.before or ""))
         return idx
 
     @staticmethod

@@ -42,7 +42,9 @@ class NiosBuild:
             ["docker", "inspect", "-f", "{{.State.Running}}", self._config.slot],
             capture_output=True, text=True, check=False,
         )
-        return proc.stdout.strip().lower() == "true"
+        running = proc.stdout.strip().lower() == "true"
+        self._logger.debug("Container %s running: %s", self._config.slot, running)
+        return running
 
     def _run(self, make_cmds: str) -> None:
         if not os.path.isdir(self._config.worktree):
@@ -60,6 +62,10 @@ class NiosBuild:
             f"export ASLAN_INSTALL_ROOT={self._config.chroot} && "
             f"{make_cmds}"
         )
+        self._logger.debug(
+            "Build env: worktree=%s chroot=%s slot=%s",
+            self._config.worktree, self._config.chroot, self._config.slot,
+        )
         self._logger.info("Build (%s): %s", self._config.slot, make_cmds)
         proc = subprocess.Popen(
             ["bash", "-lc", bash],
@@ -69,7 +75,7 @@ class NiosBuild:
             bufsize=1,
         )
         for line in proc.stdout:
-            self._logger.info(line.rstrip())
+            self._logger.debug(line.rstrip())
         proc.wait()
         if proc.returncode != 0:
             raise RuntimeError(
