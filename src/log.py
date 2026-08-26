@@ -5,17 +5,14 @@ import os
 import sys
 
 VERBOSE = 8
-VERBOSE_EX = 6
 
 logging.addLevelName(VERBOSE, "VERBOSE")
-logging.addLevelName(VERBOSE_EX, "VERBOSE_EX")
 
 LEVEL_MAP = {
     "off": logging.CRITICAL + 1,
     "info": logging.INFO,
     "debug": logging.DEBUG,
     "verbose": VERBOSE,
-    "verbose-ex": VERBOSE_EX,
 }
 
 
@@ -24,13 +21,6 @@ class NiosLogger(logging.Logger):
     def verbose(self, msg: str, *args, **kwargs) -> None:
         if self.isEnabledFor(VERBOSE):
             self._log(VERBOSE, msg, args, **kwargs)
-
-    def verbose_ex(self, msg: str, variables: dict | None = None, **kwargs) -> None:
-        if self.isEnabledFor(VERBOSE_EX):
-            if variables:
-                dump = " | ".join(f"{k}={v!r}" for k, v in variables.items())
-                msg = f"{msg}  [{dump}]"
-            self._log(VERBOSE_EX, msg, (), **kwargs)
 
 
 logging.setLoggerClass(NiosLogger)
@@ -42,16 +32,14 @@ class InfoFormatter(logging.Formatter):
 
 
 class DebugFormatter(logging.Formatter):
-    def format(self, record):
-        if record.levelno >= logging.INFO:
-            return record.getMessage()
-        return f"[dominion] {record.getMessage()}"
+    def __init__(self):
+        super().__init__(fmt="%(asctime)s  %(message)s", datefmt="%H:%M:%S")
 
 
 class VerboseFormatter(logging.Formatter):
     def __init__(self):
         super().__init__(
-            fmt="%(asctime)s %(pathname)s:%(lineno)d  %(message)s",
+            fmt="%(asctime)s %(filename)s:%(lineno)d  %(message)s",
             datefmt="%H:%M:%S",
         )
 
@@ -61,7 +49,6 @@ _FORMATTER_FOR_LEVEL = {
     "info": InfoFormatter(),
     "debug": DebugFormatter(),
     "verbose": VerboseFormatter(),
-    "verbose-ex": VerboseFormatter(),
 }
 
 
@@ -84,7 +71,7 @@ def _add_file_handler(logger: logging.Logger, log_file: str, level: str) -> None
         if isinstance(h, logging.FileHandler) and h.baseFilename == abspath:
             return
     fh = logging.FileHandler(log_file)
-    fh.setLevel(VERBOSE_EX)
+    fh.setLevel(LEVEL_MAP[level])
     fh.setFormatter(_FORMATTER_FOR_LEVEL[level])
     logger.addHandler(fh)
 
@@ -100,7 +87,7 @@ def create_logger(
     logger = logging.getLogger(name)
     # Let everything through the logger itself; each handler filters to its
     # own verbosity below.
-    logger.setLevel(VERBOSE_EX)
+    logger.setLevel(VERBOSE)
     logger.handlers.clear()
 
     formatter = _FORMATTER_FOR_LEVEL[level]

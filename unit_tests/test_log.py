@@ -7,7 +7,6 @@ import pytest
 from dominion import create_logger, resolve_log_file
 from dominion.src.log import (
     VERBOSE,
-    VERBOSE_EX,
     DebugFormatter,
     InfoFormatter,
     VerboseFormatter,
@@ -48,14 +47,9 @@ def test_create_logger_rejects_unknown_level():
     ("info", logging.INFO, InfoFormatter),
     ("debug", logging.DEBUG, DebugFormatter),
     ("verbose", VERBOSE, VerboseFormatter),
-    ("verbose-ex", VERBOSE_EX, VerboseFormatter),
 ])
 def test_create_logger_sets_level_and_formatter(level, expected_level, formatter_cls):
     logger = create_logger(name=f"dominion.unit.level_{level}", level=level)
-    # The logger itself stays maximally permissive (VERBOSE_EX) so a file
-    # handler can always capture full detail regardless of console
-    # verbosity -- the requested `level` is enforced by the console
-    # handler instead.
     assert logger.handlers[0].level == expected_level
     assert len(logger.handlers) == 1
     assert isinstance(logger.handlers[0].formatter, formatter_cls)
@@ -103,7 +97,7 @@ def test_create_logger_clears_previous_handlers():
     assert len(logger.handlers) == 1
 
 
-# -- NiosLogger.verbose / verbose_ex ---------------------------------------------
+# -- NiosLogger.verbose ------------------------------------------------------------
 
 def test_nioslogger_verbose_suppressed_below_threshold():
     logger = create_logger(name="dominion.unit.verbose_suppressed", level="info")
@@ -122,13 +116,6 @@ def test_nioslogger_verbose_emitted_when_enabled():
     assert records[0].getMessage() == "hello world"
 
 
-def test_nioslogger_verbose_ex_renders_variables():
-    logger = create_logger(name="dominion.unit.verbose_ex_vars", level="verbose-ex")
-    records = []
-    logger.handlers[0].emit = records.append
-    logger.verbose_ex("context", variables={"a": 1, "b": "two"})
-    assert len(records) == 1
-    msg = records[0].getMessage()
-    assert "context" in msg
-    assert "a=1" in msg
-    assert "b='two'" in msg
+def test_create_logger_rejects_verbose_ex():
+    with pytest.raises(ValueError, match="Unknown level"):
+        create_logger(name="dominion.unit.verbose_ex_removed", level="verbose-ex")
