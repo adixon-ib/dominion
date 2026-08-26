@@ -343,6 +343,23 @@ pytest integration_tests/ -m destructive       # opt-in: deploys/reboots real ta
 
 Root `pytest.ini` scopes bare `pytest` to `unit_tests/` only. Integration test markers (`@pytest.mark.appliance`, `@pytest.mark.ncc`, `@pytest.mark.destructive`) are defined in `integration_tests/conftest.py`.
 
+## WAPI Client
+
+`Appliance` and `LocalAppliance` expose a `.wapi` property returning a `WapiClient` for making WAPI calls inside the container:
+
+```python
+from dominion import Appliance, ApplianceConfig, WapiClient
+
+app = Appliance.from_config(ApplianceConfig(hostname="vm-04-89", ip="10.35.211.4"))
+
+result = app.wapi.get("/grid")
+result = app.wapi.post("/record:host", data={"name": "test.example.com", "ipv4addrs": [{"ipv4addr": "10.0.0.1"}]})
+result = app.wapi.put("/record:host/ref", data={"name": "updated.example.com"})
+result = app.wapi.delete("/record:host/ref")
+```
+
+`WapiClient` runs curl inside the container (localhost). Methods: `get()`, `post()`, `put()`, `delete()`, `request()`. All accept `check=True` (raises `WapiError` on failure).
+
 ## Env Vars
 
 | Variable | Effect |
