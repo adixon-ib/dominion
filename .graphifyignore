@@ -1,0 +1,18 @@
+# Tests - implementation detail, not architecture
+unit_tests/
+integration_tests/
+
+# Config files - no architecture value
+*.ini
+ruff.toml
+pyproject.toml
+
+# Operational tooling
+tools/
+
+# Examples - usage patterns, not architecture
+examples/
+
+# Session artifacts
+HANDOFF.md
+presentation.md
