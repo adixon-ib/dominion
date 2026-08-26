@@ -160,6 +160,8 @@ Local counterpart. Adds `set_network()` and `get_container_ip()`.
 | `container_name` | `str` | required | |
 | `chroot` | `str` | `"/local/91/aslan_chroot"` | |
 | `worktree` | `str \| None` | `None` | |
+| `log_level` | `str` | `"info"` | |
+| `output_dir` | `str \| None` | `None` | |
 
 ```python
 from dominion import LocalNiosContainer, LocalContainerConfig
@@ -168,6 +170,7 @@ container = LocalNiosContainer.from_config(LocalContainerConfig(
     container_name="myslot",
     chroot="/local/91/chroots/myslot",
     worktree="/path/to/my-branch",
+    log_level="info",
 ))
 
 ip = container.set_network()   # ~5-7 min: console + reboot + WAPI poll + host route
@@ -210,8 +213,9 @@ All return `DeployResult(artifact, changed, local_hash, remote_hash, restarted, 
 | `deploy_shared_lib(local_subpath, dest, restart_target, backup)` | `.so` from chroot (default: `libibonedb_util.so`) | `killall <target>` |
 | `deploy_token_stats_consumer(skip_restart)` | Consumer script from worktree | `token_stats_consumer_control` stop/start |
 | `deploy_clusterd()` | Binary from chroot | `killall clusterd` |
+| `deploy_nios_model_cloud_init()` | cloud-init module + config from worktree | None (module requests its own restart) |
 
-- `deploy_token_py` and `deploy_token_stats_consumer` require `worktree` in the config.
+- `deploy_token_py`, `deploy_token_stats_consumer`, and `deploy_nios_model_cloud_init` require `worktree` in the config.
 - `deploy_serial_console`, `deploy_shared_lib`, and `deploy_clusterd` require a prior `make install`.
 
 ## Sessions
@@ -269,7 +273,7 @@ run.skip("other check", reason="not applicable")
 run.summary(app)   # prints totals, writes summary.txt + junit.xml
 ```
 
-`Run` output directory precedence (highest first): explicit `Run(output_dir=...)`, `DOMINION_OUTPUT_DIR` env var, `config.json` `output_dir` field, `DEFAULT_RESULTS_DIR` (repo-relative `results/`).
+`Run` output directory precedence (highest first): explicit `Run(output_dir=...)`, `NIOS_TEST_OUTPUT_DIR` env var, `config.json` `output_dir` field, `DEFAULT_RESULTS_DIR` (repo-relative `results/`).
 
 ## Config via `Defaults.from_json()`
 
@@ -328,6 +332,8 @@ build.clean()   # make installclean
 
 ## Tests
 
+Run from the `scripts/dominion/` directory:
+
 ```bash
 pytest unit_tests/                             # no live target needed
 pytest integration_tests/ -m appliance         # needs a reachable appliance
@@ -335,13 +341,12 @@ pytest integration_tests/ -m ncc               # needs a running NCC container
 pytest integration_tests/ -m destructive       # opt-in: deploys/reboots real targets
 ```
 
-Integration test markers: `@pytest.mark.appliance`, `@pytest.mark.ncc`, `@pytest.mark.destructive`.
+Root `pytest.ini` scopes bare `pytest` to `unit_tests/` only. Integration test markers (`@pytest.mark.appliance`, `@pytest.mark.ncc`, `@pytest.mark.destructive`) are defined in `integration_tests/conftest.py`.
 
 ## Env Vars
 
 | Variable | Effect |
 |---|---|
-| `SKIP_DEPLOY=1` | Skip deploy phases in standalone test scripts |
-| `SKIP_CLEANUP=1` | Leave test artifacts on the appliance |
 | `NIOS_IP=10.x.y.z` | Override target IP |
-| `DOMINION_OUTPUT_DIR=/path` | Override results output directory |
+| `NIOS_TEST_OUTPUT_DIR=/path` | Override `Run` harness results output directory |
+| `DOMINION_OUTPUT_DIR=/path` | Override integration test results output directory |
