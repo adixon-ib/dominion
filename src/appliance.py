@@ -13,10 +13,12 @@ from .constants import (
     NIOS_CONSOLE_PASSWORD,
     NIOS_REBOOT_TIMEOUT,
     NIOS_SSH_READY_DELAY,
+    WAPI_VERSION,
 )
 from .container import NiosContainer, LocalNiosContainer
 from .log import create_logger
 from .transport import LocalDockerTransport, SSHDockerTransport
+from .wapi import WapiClient
 
 if TYPE_CHECKING:
     from .deploy import DeployResult
@@ -41,6 +43,27 @@ class _ApplianceBase:
     def __init__(self, container: NiosContainer, logger: NiosLogger):
         self.container = container
         self._logger = logger
+        self._wapi: WapiClient | None = None
+        self._wapi_version: str = WAPI_VERSION
+
+    @property
+    def wapi(self) -> WapiClient:
+        if self._wapi is None:
+            self._wapi = WapiClient(
+                transport=self.container._transport,
+                version=self._wapi_version,
+                logger=self._logger,
+            )
+        return self._wapi
+
+    @property
+    def wapi_version(self) -> str:
+        return self._wapi_version
+
+    @wapi_version.setter
+    def wapi_version(self, value: str):
+        self._wapi_version = value
+        self._wapi = None
 
     def shell_session(self, **kwargs):
         return self.container.shell_session(**kwargs)
@@ -103,6 +126,10 @@ class Appliance(_ApplianceBase):
             level=config.log_level,
             log_file=config.log_file,
         )
+        logger.debug(
+            "Appliance %s: host=%s port=%d chroot=%s",
+            config.hostname, config.ip or config.hostname, config.port, config.chroot,
+        )
         transport = SSHDockerTransport(
             host=config.ip or config.hostname,
             container_name=config.container_name,
@@ -150,6 +177,7 @@ class Appliance(_ApplianceBase):
                 encoding="utf-8", timeout=10,
             )
             idx = child.expect(["login:", "[Pp]assword:", r"Infoblox\s*>"], timeout=10)
+            self._logger.debug("console_connect matched prompt index %d", idx)
             if idx == 0:
                 child.sendline(self._console_user)
                 child.expect("[Pp]assword:", timeout=10)
@@ -209,6 +237,7 @@ class Appliance(_ApplianceBase):
 
     def _ensure_ssh(self) -> None:
         if self._ssh_available():
+            self._logger.debug("SSH already reachable on %s", self._ip or self._hostname)
             return
         self._enable_ssh_via_console()
         if not self._ssh_available():

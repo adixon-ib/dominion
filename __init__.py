@@ -31,6 +31,7 @@ from .src.transport import (
     SSHDockerTransport,
     TransportError,
 )
+from .src.wapi import WapiClient, WapiError
 
 __all__ = [
     "ADDKEYS_TIMEOUT",
@@ -63,6 +64,8 @@ __all__ = [
     "SSHDockerTransport",
     "ShellSession",
     "TransportError",
+    "WapiClient",
+    "WapiError",
     "create_logger",
     "resolve_ip_from_argv",
     "resolve_log_file",

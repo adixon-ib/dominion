@@ -253,3 +253,43 @@ def test_enable_ssh_via_console_returns_gracefully_on_connect_failure(monkeypatc
     monkeypatch.setattr(appliance_mod.pexpect, "spawn", raise_spawn)
 
     a._enable_ssh_via_console()  # must not raise
+
+
+# -- wapi / wapi_version (on _ApplianceBase) ----------------------------------------
+
+def _local_appliance():
+    cfg = LocalApplianceConfig(
+        container_name=DEFAULT_CONTAINER, chroot=DEFAULT_CHROOT, ip=DEFAULT_IP,
+    )
+    return LocalAppliance.from_config(cfg)
+
+
+def test_wapi_property_returns_wapi_client():
+    from dominion import WapiClient
+    app = _local_appliance()
+    assert isinstance(app.wapi, WapiClient)
+
+
+def test_wapi_property_is_cached():
+    app = _local_appliance()
+    assert app.wapi is app.wapi
+
+
+def test_wapi_version_defaults_to_constant():
+    from dominion.src.constants import WAPI_VERSION
+    app = _local_appliance()
+    assert app.wapi_version == WAPI_VERSION
+
+
+def test_wapi_version_setter_rebuilds_client():
+    app = _local_appliance()
+    old_client = app.wapi
+    app.wapi_version = "v2.15"
+    assert app.wapi is not old_client
+    assert app.wapi_version == "v2.15"
+
+
+def test_wapi_version_setter_propagates_to_client():
+    app = _local_appliance()
+    app.wapi_version = "v2.15"
+    assert app.wapi._version == "v2.15"
