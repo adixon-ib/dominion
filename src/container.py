@@ -208,7 +208,7 @@ class NiosContainer(DeployMixin):
             dest.mkdir(parents=True, exist_ok=True)
             dest = dest / Path(log_path).name
         cmd = self._build_log_cmd(log_path, since, grep)
-        _, stdout, _ = self._transport.run(cmd, check=False)
+        _, stdout, _ = self._transport.run(cmd, check=False, quiet=True)
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_text(stdout)
         self._logger.info("Log dumped to %s (%d bytes)", dest, len(stdout))
