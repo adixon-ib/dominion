@@ -37,10 +37,7 @@ class Defaults:
     def from_json(cls, path: str | None = None) -> "Defaults":
         path = path or _DEFAULT_CONFIG_PATH
         if not os.path.exists(path):
-            raise FileNotFoundError(
-                f"{path} not found. Copy config.example.json to config.json "
-                "and fill in whichever fields your Config dataclass needs."
-            )
+            return cls()
         with open(path) as f:
             data = json.load(f)
         return cls(**data)

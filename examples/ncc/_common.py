@@ -5,8 +5,8 @@ from __future__ import annotations
 import os
 import sys
 
-SCRIPTS_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-sys.path.insert(0, SCRIPTS_DIR)
+REPO_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.dirname(REPO_DIR))
 
 from dominion import LocalNiosContainer, LocalContainerConfig  # noqa: E402
 

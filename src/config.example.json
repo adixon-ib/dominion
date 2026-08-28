@@ -1,9 +1,9 @@
 {
-  "hostname": "vm-04-89",
-  "ip": "10.35.211.4",
-  "chroot": "/local/91/chroots/balerion",
-  "worktree": "/blox/adixon1/<TICKET>-<slug>",
-  "container": "balerion",
+  "hostname": "<your-appliance-hostname>",
+  "ip": "<LAN_IPADDR from get_lab_info -H hostname>",
+  "chroot": "<your-chroot-path>",
+  "worktree": "<your-worktree-path>",
+  "container": "<your-ncc-container>",
   "log_level": "info",
   "output_dir": null
 }

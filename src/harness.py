@@ -21,8 +21,14 @@ from datetime import datetime
 
 from .config import DEFAULT_RESULTS_DIR, Defaults
 
-_defaults = Defaults.from_json()
-DEFAULT_IP = _defaults.ip
+_defaults: Defaults | None = None
+
+
+def _get_defaults() -> Defaults:
+    global _defaults
+    if _defaults is None:
+        _defaults = Defaults.from_json()
+    return _defaults
 
 
 def resolve_ip_from_argv():
@@ -35,7 +41,7 @@ def resolve_ip_from_argv():
     for arg in sys.argv[1:]:
         if not arg.startswith("-"):
             return arg
-    return os.environ.get("NIOS_IP", DEFAULT_IP)
+    return os.environ.get("NIOS_IP", _get_defaults().ip)
 
 
 class Run:
@@ -59,8 +65,9 @@ class Run:
     """
 
     def __init__(self, output_dir: str | None = None, script: str | None = None):
+        defaults = _get_defaults()
         base = output_dir or os.environ.get(
-            "NIOS_TEST_OUTPUT_DIR", _defaults.output_dir or DEFAULT_RESULTS_DIR,
+            "NIOS_TEST_OUTPUT_DIR", defaults.output_dir or DEFAULT_RESULTS_DIR,
         )
         self.output_dir = os.path.join(base, datetime.now().strftime("%Y-%m-%d_%H-%M-%S"))
         self.script = script or os.path.basename(sys.argv[0])
@@ -68,6 +75,14 @@ class Run:
         self._failed = 0
         self._skipped = 0
         self._results: list[dict] = []
+        self._targets: list = []
+
+    def add(self, target) -> None:
+        """Register a target (Appliance, LocalAppliance, NiosContainer, or
+        LocalNiosContainer) with this run. summary() will auto-dump its
+        infoblox.log and use it for report labeling."""
+        if target not in self._targets:
+            self._targets.append(target)
 
     def test(self, name, fn):
         """Run fn as one named test step, recording pass/fail for the summary.
@@ -116,23 +131,28 @@ class Run:
             "error": None, "reason": reason,
         })
 
-    def summary(self, app):
+    def summary(self, app=None, *, no_ib_log=False):
         """Print totals, write summary.txt and junit.xml, then exit the process.
 
         Terminates the script with sys.exit(): 1 if any test failed, else 0.
+        Automatically dumps infoblox.log for every registered appliance
+        unless no_ib_log=True.
 
         Args:
-            app: The appliance/container object the run tested against.
-                Used to label the report target via str(app).
-
-        Raises:
-            TypeError: If app is None.
+            app: Optional. If provided, registers it (backward compat for
+                callers that pass run.summary(gm)). New code should use
+                run.add(app) instead and call run.summary() with no args.
+            no_ib_log: Skip the automatic infoblox.log dump.
         """
-        if app is None:
+        if app is not None:
+            self.add(app)
+        if not self._targets:
             raise TypeError(
-                "summary() requires the appliance/container object the run "
-                "tested against, to label the report target correctly"
+                "No targets registered. Use run.add(target) or pass one to summary()."
             )
+        if not no_ib_log:
+            self._dump_infoblox_logs()
+        primary = self._targets[0]
         total = self._passed + self._failed + self._skipped
         print(f"\n{'=' * 60}")
         print(
@@ -141,16 +161,25 @@ class Run:
         )
         print(f"{'=' * 60}")
         if self.output_dir:
-            self._write_junit(app)
+            self._write_junit(primary)
             files = sorted(os.listdir(self.output_dir)) if os.path.isdir(self.output_dir) else []
             if "summary.txt" not in files:
                 files.append("summary.txt")
                 files.sort()
-            self._write_summary(app, files)
+            self._write_summary(primary, files)
             print(f"Logs: {self.output_dir}/")
             for name in files:
                 print(f"  {name}")
         sys.exit(1 if self._failed else 0)
+
+    def _dump_infoblox_logs(self) -> None:
+        for target in self._targets:
+            name = getattr(target, "hostname", None) or getattr(target, "container_name", str(target))
+            try:
+                dest = os.path.join(self.output_dir, f"{name}_infoblox.log")
+                target.dump_infoblox_log(dest=dest)
+            except Exception as e:
+                print(f"  WARNING: failed to dump infoblox.log for {name}: {e}")
 
     def _target(self, app) -> str:
         """Label for app in reports. Each app type formats itself via __str__."""

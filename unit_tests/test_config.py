@@ -19,6 +19,7 @@ from dominion import (
     LocalContainerConfig,
 )
 from dominion.src import config as config_module
+from dominion.src.config import DEFAULT_CHROOT_PATH
 
 _EXAMPLE_CONFIG_PATH = os.path.join(os.path.dirname(config_module.__file__), "config.example.json")
 
@@ -170,11 +171,13 @@ def test_defaults_from_json_respects_explicit_output_dir(tmp_path):
     assert defaults.output_dir == "/tmp/results"
 
 
-def test_defaults_from_json_missing_file_raises(tmp_path):
+def test_defaults_from_json_missing_file_returns_empty(tmp_path):
     missing = tmp_path / "config.json"
+    defaults = Defaults.from_json(str(missing))
 
-    with pytest.raises(FileNotFoundError, match="config.example.json"):
-        Defaults.from_json(str(missing))
+    assert defaults.hostname is None
+    assert defaults.ip is None
+    assert defaults.chroot == DEFAULT_CHROOT_PATH
 
 
 def test_defaults_from_json_uses_colocated_config_when_no_path_given(tmp_path, monkeypatch):
@@ -184,4 +187,4 @@ def test_defaults_from_json_uses_colocated_config_when_no_path_given(tmp_path, m
 
     defaults = Defaults.from_json()
 
-    assert defaults.hostname == "vm-04-89"
+    assert defaults.hostname == _REQUIRED_FIELDS["hostname"]

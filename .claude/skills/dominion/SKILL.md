@@ -15,10 +15,17 @@ Python library for deploying files to and running commands against NIOS applianc
 
 ```bash
 git clone <repo-url> dominion && cd dominion
-pip install -e .
+pip install -e .                  # on pip < 23: pip install -e . --no-build-isolation
 cp src/config.example.json src/config.json
-# edit config.json: hostname, ip, chroot, worktree, container, log_level
+# edit config.json with your appliance details:
+#   hostname: your appliance hostname (e.g. vm-04-89)
+#   ip:       LAN_IPADDR from `get_lab_info -H <hostname>` (NOT MGMT_IPADDR)
+#   chroot:   your NCC chroot path (e.g. /local/91/aslan_chroot)
+#   worktree: your NIOS source worktree path
+#   container: your NCC container name
 ```
+
+`config.json` is optional. Without it, `import dominion` works but you must pass all values explicitly via config dataclasses. With it, `Defaults.from_json()` and the test harness pick up your defaults automatically.
 
 After `pip install -e .`, import directly -- no `sys.path` hacking needed:
 
@@ -234,10 +241,21 @@ with app.shell_session() as shell:
     shell.sendline("my_value")
 ```
 
-### ConsoleSession
+### ConsoleSession vs ConsoleConnectSession
+
+`ConsoleSession` connects via SSH (`ssh admin@<ip>`). Dies if NIOS reboots.
+
+`ConsoleConnectSession` connects via lab console server (`console_connect -H <hostname>`). Out-of-band serial connection that survives NIOS reboots. Only works for lab-registered appliances.
+
+Both share the same API: `run()`, `sendline()`, `expect()`, `expect_one_of()`.
 
 ```python
+# ConsoleSession -- in-band, SSH-based
 with app.console_session() as console:
+    output = console.run("show status")
+
+# ConsoleConnectSession -- out-of-band, survives reboots
+with app.console_connect_session() as console:
     output = console.run("show status")
 
     # Interactive multi-step flow
@@ -247,6 +265,24 @@ with app.console_session() as console:
 
     # expect_one_of returns the index of which pattern matched
     idx = console.expect_one_of(["Enter DSCP", "Configure IPv6"])
+```
+
+**Waiting through a NIOS reboot** (e.g. grid join). The telnet stays alive through a NIOS-level reboot:
+
+```python
+with app.console_connect_session() as console:
+    console.sendline("set membership")
+    console.expect("Master VIP")
+    console.sendline(master_ip)
+    # ... finish wizard, NIOS reboots ...
+    console.expect("login:", timeout=600)
+```
+
+**Reconnecting after a VM power cycle**. Poweroff kills the telnet, so open a new session with a long timeout. `_open()` waits for boot, authenticates, and lands at `Infoblox >`:
+
+```python
+with app.console_connect_session(timeout=300) as console:
+    output = console.run("show status")
 ```
 
 Session `run()` does not accept `check=`. It returns the text between sending the command and seeing the next prompt. Assert on the returned text. For exit-code checking, use `transport.run()`.
@@ -291,7 +327,23 @@ d = Defaults.from_json("/path/to/my/config.json")  # or a custom path
 
 Fields: `hostname`, `ip`, `chroot`, `worktree`, `container`, `log_level`, `output_dir`. All optional.
 
-Scripts can keep their own `config.json` alongside themselves instead of sharing the repo-wide one.
+Scripts can keep their own `config.json` alongside themselves instead of sharing the repo-wide one. For multi-target scripts (e.g. GM + member, or appliance + NCC), call `from_json()` with different paths:
+
+```python
+from dominion import Appliance, ApplianceConfig, Defaults
+
+gm = Defaults.from_json("configs/gm.json")
+member = Defaults.from_json("configs/member.json")
+
+gm_app = Appliance.from_config(ApplianceConfig(
+    hostname=gm.hostname, ip=gm.ip, worktree=gm.worktree,
+))
+member_app = Appliance.from_config(ApplianceConfig(
+    hostname=member.hostname, ip=member.ip, worktree=member.worktree,
+))
+```
+
+Each config file has the same schema. The repo-wide `src/config.json` is just the default when no path is given.
 
 ## Grid and Build
 
@@ -332,16 +384,16 @@ build.clean()   # make installclean
 
 ## Tests
 
-Run from the `scripts/dominion/` directory:
+Run from the repo root:
 
 ```bash
-pytest unit_tests/                             # no live target needed
-pytest integration_tests/ -m appliance         # needs a reachable appliance
-pytest integration_tests/ -m ncc               # needs a running NCC container
-pytest integration_tests/ -m destructive       # opt-in: deploys/reboots real targets
+pytest                                                              # unit tests only (safe)
+cd integration_tests && pytest -m "appliance and not destructive"   # safe appliance tests
+cd integration_tests && pytest -m "ncc and not destructive"         # safe NCC tests
+cd integration_tests && pytest -m "destructive and appliance"       # opt-in: deploys real files
 ```
 
-Root `pytest.ini` scopes bare `pytest` to `unit_tests/` only. Integration test markers (`@pytest.mark.appliance`, `@pytest.mark.ncc`, `@pytest.mark.destructive`) are defined in `integration_tests/conftest.py`.
+Root `pytest.ini` scopes bare `pytest` to `unit_tests/` only. Always combine marker expressions with `not destructive` unless you intend to deploy/reboot. Some tests carry both `appliance` and `destructive` markers; using `-m appliance` alone overrides the safety default in `addopts`.
 
 ## WAPI Client
 

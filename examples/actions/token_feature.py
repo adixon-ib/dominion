@@ -7,14 +7,14 @@ import os
 import subprocess
 import sys
 
-SCRIPTS_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-sys.path.insert(0, SCRIPTS_DIR)
+REPO_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.dirname(REPO_DIR))
 
 from dominion import Appliance  # noqa: E402
 
 log = logging.getLogger(__name__)
 
-UPDATE_TOKEN_BUNDLE_SCRIPT = os.path.join(SCRIPTS_DIR, "appliance", "update_token_bundle.sh")
+UPDATE_TOKEN_BUNDLE_SCRIPT = os.path.join(REPO_DIR, "tools", "update_token_bundle.sh")
 
 
 def enable_token_mode(app: Appliance) -> None:
