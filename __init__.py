@@ -1,4 +1,4 @@
-from .src.appliance import Appliance, LocalAppliance, ssh_reachable
+from .src.appliance import Appliance, LocalAppliance, reset_console, ssh_reachable
 from .src.build import NiosBuild
 from .src.config import (
     DEFAULT_RESULTS_DIR,
@@ -24,7 +24,7 @@ from .src.deploy import DeployError, DeployResult
 from .src.grid import Grid
 from .src.harness import Run, resolve_ip_from_argv
 from .src.log import LogDump, LogMark, create_logger, resolve_log_file
-from .src.session import ConsoleSession, ShellSession
+from .src.session import ConsoleConnectSession, ConsoleSession, ShellSession
 from .src.transport import (
     CommandError,
     LocalDockerTransport,
@@ -47,6 +47,7 @@ __all__ = [
     "ApplianceConfig",
     "BuildConfig",
     "CommandError",
+    "ConsoleConnectSession",
     "ConsoleSession",
     "Defaults",
     "DeployError",
@@ -69,6 +70,7 @@ __all__ = [
     "WapiClient",
     "WapiError",
     "create_logger",
+    "reset_console",
     "resolve_ip_from_argv",
     "resolve_log_file",
     "ssh_reachable",

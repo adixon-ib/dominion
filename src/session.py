@@ -9,6 +9,7 @@ For one-shot commands with a return code, use transport.py instead."""
 from __future__ import annotations
 
 import re
+import time
 from typing import TYPE_CHECKING, Union
 
 import pexpect
@@ -366,13 +367,117 @@ class ConsoleSession(BaseSession):
         if index == 0:
             self._logger.debug("Login prompt detected, authenticating")
             self._child.sendline(self._user)
-            self._child.expect(self.PASSWORD_PATTERN, timeout=15)
+            self._child.expect(self.PASSWORD_PATTERN, timeout=int(self._default_timeout))
             self._child.sendline(self._password)
-            self._child.expect(self.PROMPT_PATTERN, timeout=30)
+            self._child.expect(self.PROMPT_PATTERN, timeout=int(self._default_timeout))
         elif index == 1:
             self._logger.debug("Password prompt detected, authenticating")
             self._child.sendline(self._password)
-            self._child.expect(self.PROMPT_PATTERN, timeout=30)
+            self._child.expect(self.PROMPT_PATTERN, timeout=int(self._default_timeout))
 
         self._last_prompt = _ANSI_RE.sub("", self._child.after or "").strip()
         self._logger.debug("Console session ready (Infoblox > prompt)")
+
+    @override
+    def _close(self) -> None:
+        if self._child and self._child.isalive():
+            self._logger.debug("Closing console session")
+            try:
+                self._child.sendline("exit")
+                self._child.expect(pexpect.EOF, timeout=5)
+            except (pexpect.ExceptionPexpect, OSError):
+                pass
+            finally:
+                self._child.close(force=True)
+        self._child = None
+
+
+class ConsoleConnectSession(ConsoleSession):
+    """Out-of-band console via lab console server. No login flow needed
+    (session is already authenticated), disconnect with ~."""
+
+    def __init__(
+        self,
+        spawn_cmd: str,
+        user: str = NIOS_CONSOLE_USER,
+        password: str = NIOS_CONSOLE_PASSWORD,
+        logger: NiosLogger | None = None,
+        timeout: float = 60,
+    ):
+        super().__init__(
+            spawn_cmd=spawn_cmd,
+            user=user,
+            password=password,
+            logger=logger,
+            timeout=timeout,
+        )
+
+    @override
+    def _open(self) -> None:
+        self._logger.debug("Opening console_connect session: %s", self._spawn_cmd)
+        self._child = pexpect.spawn(
+            self._spawn_cmd,
+            encoding="utf-8",
+            timeout=int(self._default_timeout),
+            echo=False,
+        )
+
+        # Wait for the telnet connection to establish and any stale
+        # data (prompts from previous sessions, console server
+        # artifacts) to arrive through the serial path.
+        time.sleep(2)
+
+        # Drain everything without sending anything new. Each
+        # sendline("") would add another prompt to the queue, making
+        # the stale-prompt problem worse.
+        drained = []
+        try:
+            while True:
+                chunk = self._child.read_nonblocking(size=4096, timeout=1)
+                drained.append(chunk)
+        except (pexpect.TIMEOUT, pexpect.EOF):
+            pass
+        if drained:
+            self._logger.debug("Drained stale data: %r", "".join(drained))
+
+        # One sendline to get a fresh prompt. If a stray '%' is in
+        # NIOS's input buffer, our '\n' completes it as a command
+        # (producing error + prompt), which the expect consumes.
+        self._child.sendline("")
+        index = self._child.expect(
+            [self.PROMPT_PATTERN, self.LOGIN_PATTERN],
+            timeout=int(self._default_timeout),
+        )
+        if index == 1:
+            self._logger.debug("Login prompt detected, authenticating")
+            self._child.sendline(self._user)
+            self._child.expect(self.PASSWORD_PATTERN, timeout=int(self._default_timeout))
+            self._child.sendline(self._password)
+            self._child.expect(self.PROMPT_PATTERN, timeout=int(self._default_timeout))
+
+        self._last_prompt = _ANSI_RE.sub("", self._child.after or "").strip()
+        self._logger.debug("Console connect session ready")
+
+    @override
+    def run(self, cmd: str, timeout: float | None = None) -> str:
+        output = super().run(cmd, timeout=timeout)
+        if "unknown command '%'" in output:
+            # Console server injected a stray '%' into NIOS's input.
+            # NIOS discards remaining input after the error, so our
+            # command never executed. Retry on a clean buffer.
+            self._logger.debug("Stray '%%' absorbed, retrying: %s", cmd)
+            output = super().run(cmd, timeout=timeout)
+        return output
+
+    @override
+    def _close(self) -> None:
+        if self._child and self._child.isalive():
+            self._logger.debug("Disconnecting console_connect session")
+            try:
+                self._child.sendline("\r~.")
+                self._child.expect(pexpect.EOF, timeout=5)
+            except (pexpect.ExceptionPexpect, OSError):
+                pass
+            finally:
+                self._child.close(force=True)
+        self._child = None

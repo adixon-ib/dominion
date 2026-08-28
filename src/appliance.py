@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import subprocess
 import time
-from typing import TYPE_CHECKING
+from contextlib import contextmanager
 
 import pexpect
+from typing import TYPE_CHECKING
 
 from .config import ApplianceConfig, LocalApplianceConfig
 from .constants import (
@@ -17,6 +18,7 @@ from .constants import (
 )
 from .container import NiosContainer, LocalNiosContainer
 from .log import LogDump, LogMark, create_logger
+from .session import ConsoleConnectSession, ConsoleSession
 from .transport import LocalDockerTransport, SSHDockerTransport
 from .wapi import WapiClient
 
@@ -36,6 +38,11 @@ def ssh_reachable(host: str, timeout: int = 5) -> bool:
         return result.returncode == 0
     except Exception:
         return False
+
+
+def reset_console(hostname: str) -> None:
+    """Force-release a stuck console server session."""
+    subprocess.run(["reset_console", "-H", hostname], check=True)
 
 
 class _ApplianceBase:
@@ -182,56 +189,94 @@ class Appliance(_ApplianceBase):
     def hostname(self) -> str:
         return self._hostname
 
+    @contextmanager
+    def console_connect_session(self, logger=None, timeout=60):
+        """Out-of-band console via lab console server. Survives NIOS reboots.
+        Only works for lab-registered appliances."""
+        reset_console(self._hostname)
+        spawn_cmd = f"console_connect -H {self._hostname}"
+        session = ConsoleConnectSession(
+            spawn_cmd=spawn_cmd,
+            user=self._console_user,
+            password=self._console_password,
+            logger=logger or self._logger,
+            timeout=timeout,
+        )
+        try:
+            session._open()
+            yield session
+        finally:
+            session._close()
+
     def _ssh_available(self) -> bool:
         return ssh_reachable(self._ip or self._hostname)
 
+    @staticmethod
+    def _console_set(console, cmd) -> None:
+        """Run a console set command, answering y to all prompts."""
+        console.sendline(cmd)
+        while True:
+            idx = console.expect_one_of([r"Infoblox\s*>", r"y or n\):"])
+            if idx == 0:
+                break
+            time.sleep(0.1)
+            console.sendline("y")
+
     def _enable_ssh_via_console(self) -> None:
         ip = self._ip or self._hostname
-        self._logger.info("SSH unavailable on %s — enabling via console_connect", ip)
+        self._logger.info("SSH unavailable on %s — power-cycling and enabling via console", ip)
+
+        self._logger.info("Powering off %s", self._hostname)
+        subprocess.run(
+            ["reboot_system", "-H", self._hostname, "-a", "poweroff"],
+            timeout=30,
+        )
+        time.sleep(5)
+        self._logger.info("Powering on %s", self._hostname)
+        subprocess.run(
+            ["reboot_system", "-H", self._hostname, "-a", "poweron"],
+            timeout=30,
+        )
 
         try:
-            child = pexpect.spawn(
-                f"console_connect -H {self._hostname}",
-                encoding="utf-8", timeout=10,
+            reset_console(self._hostname)
+            spawn_cmd = f"console_connect -H {self._hostname}"
+            session = ConsoleConnectSession(
+                spawn_cmd=spawn_cmd,
+                user=self._console_user,
+                password=self._console_password,
+                logger=self._logger,
+                timeout=NIOS_REBOOT_TIMEOUT,
             )
-            idx = child.expect(["login:", "[Pp]assword:", r"Infoblox\s*>"], timeout=10)
-            self._logger.debug("console_connect matched prompt index %d", idx)
-            if idx == 0:
-                child.sendline(self._console_user)
-                child.expect("[Pp]assword:", timeout=10)
-                child.sendline(self._console_password)
-                child.expect(r"Infoblox\s*>", timeout=10)
-            elif idx == 1:
-                child.sendline(self._console_password)
-                child.expect(r"Infoblox\s*>", timeout=10)
-        except (pexpect.TIMEOUT, pexpect.EOF, Exception) as e:
+            session._child = pexpect.spawn(
+                spawn_cmd, encoding="utf-8",
+                timeout=NIOS_REBOOT_TIMEOUT, echo=False,
+            )
+            # Wait for NIOS to boot — login: appears after ~2-3 minutes
+            self._logger.info("Waiting for %s to boot (up to %ds)...", self._hostname, NIOS_REBOOT_TIMEOUT)
+            session._child.expect(session.LOGIN_PATTERN, timeout=NIOS_REBOOT_TIMEOUT)
+            session._child.sendline(self._console_user)
+            session._child.expect(session.PASSWORD_PATTERN, timeout=15)
+            session._child.sendline(self._console_password)
+            session._child.expect(session.PROMPT_PATTERN, timeout=30)
+            session._last_prompt = session._child.after or ""
+
+            try:
+                self._console_set(session, "set remote_console")
+
+                output = session.run("show support_access")
+                if "expires in" in output:
+                    self._logger.debug("Support access already active on %s", ip)
+                else:
+                    self._console_set(session, "set support_access")
+            finally:
+                session._close()
+        except Exception as e:
             self._logger.info(
-                "Cannot connect to console on %s: %s. "
+                "Cannot enable SSH on %s via console: %s. "
                 "Enable SSH manually, or close any open console session and retry.",
                 self._hostname, e,
             )
-            return
-
-        try:
-            child.sendline("set remote_console")
-            child.expect(r"y or n\):", timeout=10)
-            child.sendline("y")
-            child.expect(r"y or n\):", timeout=10)
-            child.sendline("y")
-            child.expect(r"Infoblox\s*>", timeout=10)
-
-            child.sendline("set support_access")
-            child.expect(r"y or n\):", timeout=10)
-            child.sendline("y")
-            child.expect(r"y or n\):", timeout=10)
-            child.sendline("y")
-            child.expect(r"Infoblox\s*>", timeout=10)
-
-            child.sendline("exit")
-            child.close()
-        except (pexpect.TIMEOUT, pexpect.EOF) as e:
-            self._logger.info("Console command failed: %s", e)
-            child.close(force=True)
             return
 
         self._logger.info("Console setup done — waiting %ds for SSH to come up", NIOS_SSH_READY_DELAY)

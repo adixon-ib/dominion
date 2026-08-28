@@ -214,6 +214,10 @@ class FakeChild:
     def sendline(self, text):
         self.sent.append(("sendline", text))
 
+    def read_nonblocking(self, size=1, timeout=-1):
+        import pexpect as _pexpect
+        raise _pexpect.TIMEOUT("fake")
+
     def isalive(self):
         return self._alive
 

@@ -1,4 +1,5 @@
-"""Unit tests for appliance.py: Appliance, LocalAppliance, ssh_reachable().
+"""Unit tests for appliance.py: Appliance, LocalAppliance, ssh_reachable(),
+reset_console(), console_connect_session().
 
 Constructing a real `Appliance` normally probes SSH for real (`_ensure_ssh()`
 in `__init__`) — every test that constructs one here mocks `ssh_reachable`
@@ -8,10 +9,13 @@ methods hold the real branching logic and were previously untested.
 """
 
 import logging
+from contextlib import contextmanager
 
+import pexpect
 import pytest
 
 import dominion.src.appliance as appliance_mod
+import dominion.src.session as session_mod
 from dominion import (
     Appliance,
     ApplianceConfig,
@@ -20,6 +24,7 @@ from dominion import (
     LocalDockerTransport,
     LocalNiosContainer,
     SSHDockerTransport,
+    reset_console,
 )
 
 LOGGER = logging.getLogger("dominion.unit_test")
@@ -197,60 +202,139 @@ def test_ensure_ssh_raises_when_still_unreachable(monkeypatch):
 
 # -- Appliance._enable_ssh_via_console() ---------------------------------------------
 
-def _patch_console_env(monkeypatch, fake_child_factory, script):
-    child = fake_child_factory(script=script)
-    monkeypatch.setattr(appliance_mod.pexpect, "spawn", lambda *a, **k: child)
+class FakeChild:
+    """Fake pexpect child for _enable_ssh_via_console boot + login flow."""
+    def __init__(self):
+        self.after = ""
+        self.before = ""
+
+    def expect(self, pattern, timeout=None):
+        self.after = "Infoblox > "
+        return 0
+
+    def sendline(self, text):
+        pass
+
+    def read_nonblocking(self, size=1, timeout=-1):
+        raise pexpect.TIMEOUT("fake")
+
+    def isalive(self):
+        return True
+
+    def close(self, force=False):
+        pass
+
+
+class FakeConsole:
+    """Minimal fake for ConsoleSession used by _enable_ssh_via_console."""
+    def __init__(self, show_support_access_output="Current support access status: off",
+                 prompts_per_set=2):
+        self.sent: list[str] = []
+        self._show_support_access_output = show_support_access_output
+        self._prompts_per_set = prompts_per_set
+        self._prompt_count = 0
+
+    def sendline(self, text):
+        self.sent.append(text)
+        if text.startswith("set "):
+            self._prompt_count = 0
+
+    def expect(self, pattern, timeout=None):
+        return ""
+
+    def expect_one_of(self, patterns, timeout=None):
+        if self._prompt_count < self._prompts_per_set:
+            self._prompt_count += 1
+            return 1  # y or n prompt
+        return 0  # Infoblox >
+
+    def run(self, cmd, timeout=None):
+        if cmd == "show support_access":
+            return self._show_support_access_output
+        return ""
+
+
+def _patch_enable_ssh(monkeypatch, fake_console=None):
+    console = fake_console or FakeConsole()
+
+    def fake_spawn(*a, **k):
+        return FakeChild()
+
+    def fake_init(self, *a, **k):
+        self._spawn_cmd = ""
+        self._prompt_pattern = r"Infoblox\s*>"
+        self._logger = LOGGER
+        self._default_timeout = 30
+        self._child = None
+        self._last_prompt = ""
+        self._user = "admin"
+        self._password = "infoblox"
+        self._disconnect_cmd = "\r~."
+        # Inject fake console methods onto the session
+        self.sent = console.sent
+        self.sendline = console.sendline
+        self.expect = console.expect
+        self.expect_one_of = console.expect_one_of
+        self.run = console.run
+        self._close = lambda: None
+
+    monkeypatch.setattr(appliance_mod.pexpect, "spawn", fake_spawn)
+    monkeypatch.setattr(
+        "dominion.src.session.ConsoleConnectSession.__init__", fake_init,
+    )
     monkeypatch.setattr(appliance_mod.time, "sleep", lambda s: None)
     monkeypatch.setattr(
         appliance_mod.subprocess, "run",
         lambda *a, **k: type("R", (), {"returncode": 0})(),
     )
-    return child
+    return console
 
 
-def test_enable_ssh_via_console_login_branch(monkeypatch, fake_child_factory):
-    script = [(0, "", "login: ")] + [(0, "", "y or n): ") for _ in range(8)]
-    child = _patch_console_env(monkeypatch, fake_child_factory, script)
-
-    a = _bare_appliance()
-    a._enable_ssh_via_console()
-
-    assert ("sendline", "admin") in child.sent
-    assert ("sendline", "infoblox") in child.sent
-    assert ("sendline", "set remote_console") in child.sent
-    assert ("sendline", "set support_access") in child.sent
-    assert ("sendline", "exit") in child.sent
-
-
-def test_enable_ssh_via_console_password_only_branch(monkeypatch, fake_child_factory):
-    script = [(1, "", "Password: ")] + [(0, "", "y or n): ") for _ in range(7)]
-    child = _patch_console_env(monkeypatch, fake_child_factory, script)
+def test_enable_ssh_when_support_access_off(monkeypatch):
+    console = _patch_enable_ssh(monkeypatch,
+        FakeConsole(show_support_access_output="Current support access status: off"))
 
     a = _bare_appliance()
     a._enable_ssh_via_console()
 
-    assert child.sent[0] == ("sendline", "infoblox")
+    assert "set remote_console" in console.sent
+    assert "set support_access" in console.sent
 
 
-def test_enable_ssh_via_console_already_at_prompt_skips_auth(
-    monkeypatch, fake_child_factory,
-):
-    script = [(2, "", "Infoblox > ")] + [(0, "", "y or n): ") for _ in range(6)]
-    child = _patch_console_env(monkeypatch, fake_child_factory, script)
+def test_enable_ssh_when_support_access_expired(monkeypatch):
+    console = _patch_enable_ssh(monkeypatch,
+        FakeConsole(show_support_access_output="Code has expired"))
 
     a = _bare_appliance()
     a._enable_ssh_via_console()
 
-    assert child.sent[0] == ("sendline", "set remote_console")
+    assert "set remote_console" in console.sent
+    assert "set support_access" in console.sent
+
+
+def test_enable_ssh_when_support_access_active(monkeypatch):
+    console = _patch_enable_ssh(monkeypatch,
+        FakeConsole(show_support_access_output="code (expires in 23:45): ABC123"))
+
+    a = _bare_appliance()
+    a._enable_ssh_via_console()
+
+    assert "set remote_console" in console.sent
+    assert "set support_access" not in console.sent
 
 
 def test_enable_ssh_via_console_returns_gracefully_on_connect_failure(monkeypatch):
     a = _bare_appliance()
 
-    def raise_spawn(*args, **kwargs):
-        raise Exception("connection refused")
-
-    monkeypatch.setattr(appliance_mod.pexpect, "spawn", raise_spawn)
+    monkeypatch.setattr(appliance_mod.time, "sleep", lambda s: None)
+    monkeypatch.setattr(
+        appliance_mod.subprocess, "run",
+        lambda *a, **k: type("R", (), {"returncode": 0})(),
+    )
+    monkeypatch.setattr(
+        appliance_mod.pexpect, "spawn",
+        lambda *a, **k: (_ for _ in ()).throw(Exception("connection refused")),
+    )
 
     a._enable_ssh_via_console()  # must not raise
 
@@ -293,3 +377,104 @@ def test_wapi_version_setter_propagates_to_client():
     app = _local_appliance()
     app.wapi_version = "v2.15"
     assert app.wapi._version == "v2.15"
+
+
+# -- console_connect_session() ----------------------------------------------------
+
+def _console_connect_script():
+    """Script for FakeChild: drain + wakeup + disconnect."""
+    import pexpect as _pexpect
+    return [
+        (0, "", "Infoblox > "),    # _open: wakeup sendline("") -> expect PROMPT
+        _pexpect.EOF("done"),      # _close: disconnect with \r~.
+    ]
+
+
+def _mock_reset_console(monkeypatch):
+    monkeypatch.setattr(
+        appliance_mod.subprocess, "run",
+        lambda *a, **k: type("R", (), {"returncode": 0})(),
+    )
+
+
+def test_console_connect_session_spawns_correct_command(monkeypatch, fake_child_factory):
+    child = fake_child_factory(script=_console_connect_script())
+    _mock_reset_console(monkeypatch)
+    monkeypatch.setattr(session_mod.pexpect, "spawn", lambda *a, **k: child)
+
+    a = _bare_appliance()
+    with a.console_connect_session(timeout=10) as session:
+        assert session is not None
+
+
+def test_console_connect_session_uses_hostname(monkeypatch, fake_child_factory):
+    child = fake_child_factory(script=_console_connect_script())
+    _mock_reset_console(monkeypatch)
+    spawned_cmds = []
+
+    def capture_spawn(cmd, **kwargs):
+        spawned_cmds.append(cmd)
+        return child
+
+    monkeypatch.setattr(session_mod.pexpect, "spawn", capture_spawn)
+
+    a = _bare_appliance(hostname="vm-99-01")
+    with a.console_connect_session() as _session:
+        pass
+
+    assert any("console_connect -H vm-99-01" in cmd for cmd in spawned_cmds)
+
+
+def test_console_connect_session_sends_disconnect_on_close(monkeypatch, fake_child_factory):
+    child = fake_child_factory(script=_console_connect_script())
+    _mock_reset_console(monkeypatch)
+    monkeypatch.setattr(session_mod.pexpect, "spawn", lambda *a, **k: child)
+
+    a = _bare_appliance()
+    with a.console_connect_session() as _session:
+        pass
+
+    assert ("sendline", "\r~.") in child.sent
+
+
+def test_console_connect_session_resets_before_connect(monkeypatch, fake_child_factory):
+    child = fake_child_factory(script=_console_connect_script())
+    reset_calls = []
+
+    def fake_run(args, **kwargs):
+        reset_calls.append(args)
+        return type("R", (), {"returncode": 0})()
+
+    monkeypatch.setattr(appliance_mod.subprocess, "run", fake_run)
+    monkeypatch.setattr(session_mod.pexpect, "spawn", lambda *a, **k: child)
+
+    a = _bare_appliance(hostname="vm-04-89")
+    with a.console_connect_session() as _session:
+        pass
+
+    assert ["reset_console", "-H", "vm-04-89"] in reset_calls
+
+
+# -- reset_console() ---------------------------------------------------------------
+
+def test_reset_console_calls_binary(monkeypatch):
+    calls = []
+
+    def fake_run(args, **kwargs):
+        calls.append(args)
+        return type("R", (), {"returncode": 0})()
+
+    monkeypatch.setattr(appliance_mod.subprocess, "run", fake_run)
+    reset_console("vm-04-89")
+    assert calls == [["reset_console", "-H", "vm-04-89"]]
+
+
+def test_reset_console_raises_on_failure(monkeypatch):
+    import subprocess as sp
+
+    def fake_run(args, **kwargs):
+        raise sp.CalledProcessError(1, args)
+
+    monkeypatch.setattr(appliance_mod.subprocess, "run", fake_run)
+    with pytest.raises(sp.CalledProcessError):
+        reset_console("vm-04-89")
