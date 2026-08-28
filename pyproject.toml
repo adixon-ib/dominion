@@ -16,5 +16,5 @@ dependencies = [
 test = ["pytest"]
 
 [tool.setuptools]
-packages = ["dominion", "dominion.src"]
+packages = ["dominion", "dominion.src", "dominion.actions"]
 package-dir = {"dominion" = "."}

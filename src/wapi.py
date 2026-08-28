@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import time
 from typing import TYPE_CHECKING, Any
 
 from .constants import NIOS_CONSOLE_PASSWORD, NIOS_CONSOLE_USER, WAPI_VERSION
@@ -105,6 +106,25 @@ class WapiClient:
         check: bool = True,
     ) -> tuple[int, Any]:
         return self._request(method, path, data=data, params=params, check=check)
+
+    def wait_until_ready(self, timeout: int = 300, interval: int = 10) -> None:
+        """Poll WAPI until it responds to a grid request.
+
+        Args:
+            timeout: Maximum seconds to wait before raising.
+            interval: Seconds between poll attempts.
+
+        Raises:
+            RuntimeError: If WAPI does not respond within timeout.
+        """
+        for i in range(timeout // interval):
+            try:
+                if self.get("grid"):
+                    return
+            except Exception:
+                pass
+            time.sleep(interval)
+        raise RuntimeError(f"WAPI not ready after {timeout}s")
 
     def __repr__(self) -> str:
         return f"WapiClient(version={self._version!r})"
