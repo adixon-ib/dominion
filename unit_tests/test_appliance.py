@@ -37,6 +37,8 @@ DEFAULT_CHROOT = "/local/91/chroots/balerion"
 @pytest.fixture
 def ssh_always_reachable(monkeypatch):
     monkeypatch.setattr(appliance_mod, "ssh_reachable", lambda host, timeout=5: True)
+    from dominion.src.container import NiosContainer
+    monkeypatch.setattr(NiosContainer, "_disable_ssh_rate_limit", lambda self: None)
 
 
 def _bare_appliance(hostname=DEFAULT_HOSTNAME, ip=DEFAULT_IP):
