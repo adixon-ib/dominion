@@ -24,15 +24,12 @@ WAPI_VERSION="v2.12"
 
 IP_ADDRESS="${1:-${NIOS_IP:-}}"
 if [[ -z "$IP_ADDRESS" ]]; then
-    echo "Usage: $0 <gm_ip>  (or set NIOS_IP)"
+    echo "Usage: $0 <gm_ip> [token_bundle.tar]  (or set NIOS_IP)"
     exit 1
 fi
 
-# Resolve the script's own directory so we find token_bundle.tar
-# regardless of where the script is called from.
 SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
-
-BUNDLE="$SCRIPT_DIR/token_bundle.tar"
+BUNDLE="${2:-$SCRIPT_DIR/token_bundle.tar}"
 TAB_FILE="tab.json"
 REMOTE_PATH="/storage/tmp/token_bundle.tar"
 REQUIRED_MEMBERS=(tab.json docker-compose.yml usage_calculator)
