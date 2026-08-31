@@ -8,7 +8,9 @@ For one-shot commands with a return code, use transport.py instead."""
 
 from __future__ import annotations
 
+import logging
 import re
+import sys
 import time
 from typing import TYPE_CHECKING, Union
 
@@ -26,6 +28,21 @@ log = create_logger(name=__name__)
 # Match ANSI escape codes (colors, formatting) for removal from terminal output
 # to keep logs readable
 _ANSI_RE = re.compile(r"\x1b\[\??[0-9;]*[a-zA-Z]")
+
+
+class _TeeWriter:
+    """File-like object that writes to multiple streams."""
+
+    def __init__(self, *streams):
+        self._streams = streams
+
+    def write(self, data):
+        for s in self._streams:
+            s.write(data)
+
+    def flush(self):
+        for s in self._streams:
+            s.flush()
 
 
 class BaseSession:
@@ -250,7 +267,7 @@ class ShellSession(BaseSession):
 
         For a single command that goes straight back to the prompt with no
         follow-up questions, like "pgrep -f token_aggregator".
-        
+
         Use when a failing exit code doesn't need
         to abort the script, either because it's an expected outcome you'll
         branch on (check `last_exit_code` yourself), or because you
@@ -412,6 +429,15 @@ class ConsoleConnectSession(ConsoleSession):
             timeout=timeout,
         )
 
+    def _build_logfile_read(self):
+        """Build a tee writer for stdout + log file, or None if no file handler."""
+        streams = [sys.stdout]
+        for handler in self._logger.handlers:
+            if isinstance(handler, logging.FileHandler):
+                streams.append(handler.stream)
+                break
+        return _TeeWriter(*streams)
+
     @override
     def _open(self) -> None:
         self._logger.debug("Opening console_connect session: %s", self._spawn_cmd)
@@ -421,6 +447,7 @@ class ConsoleConnectSession(ConsoleSession):
             timeout=int(self._default_timeout),
             echo=False,
         )
+        self._child.logfile_read = self._build_logfile_read()
 
         # Wait for the telnet connection to establish and any stale
         # data (prompts from previous sessions, console server
