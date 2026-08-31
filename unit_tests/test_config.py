@@ -102,6 +102,21 @@ def test_build_config_output_dir_resolves_log_file(tmp_path):
 
 # -- Defaults --------------------------------------------------------------
 
+@pytest.fixture(autouse=True)
+def _clean_nios_ip_env(monkeypatch):
+    monkeypatch.delenv("NIOS_IP", raising=False)
+
+
+def test_defaults_from_json_nios_ip_env_overrides_config(tmp_path, monkeypatch):
+    config_file = tmp_path / "config.json"
+    config_file.write_text(json.dumps({"ip": "10.0.0.1"}))
+    monkeypatch.setenv("NIOS_IP", "10.9.9.9")
+
+    defaults = Defaults.from_json(str(config_file))
+
+    assert defaults.ip == "10.9.9.9"
+
+
 def test_defaults_from_json_accepts_arbitrary_path(tmp_path):
     """from_json(path) isn't limited to src/config.json — any script can
     keep its own config.json (e.g. a ticket script pinned to a specific

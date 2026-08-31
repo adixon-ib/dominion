@@ -58,7 +58,6 @@ class NiosBuild:
             )
         bash = (
             f"cd {self._config.worktree} && "
-            f"setbuild && "
             f"export ASLAN_INSTALL_ROOT={self._config.chroot} && "
             f"{make_cmds}"
         )

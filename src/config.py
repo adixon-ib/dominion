@@ -37,10 +37,15 @@ class Defaults:
     def from_json(cls, path: str | None = None) -> "Defaults":
         path = path or _DEFAULT_CONFIG_PATH
         if not os.path.exists(path):
-            return cls()
-        with open(path) as f:
-            data = json.load(f)
-        return cls(**data)
+            defaults = cls()
+        else:
+            with open(path) as f:
+                data = json.load(f)
+            defaults = cls(**data)
+        env_ip = os.environ.get("NIOS_IP")
+        if env_ip:
+            defaults.ip = env_ip
+        return defaults
 
 
 @dataclass
