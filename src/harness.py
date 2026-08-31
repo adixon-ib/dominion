@@ -6,9 +6,7 @@ than through the integration_tests/ pytest suite. Exported from the
 top-level dominion package. Use `from dominion import Run`.
 
 Do not use this module from anything under integration_tests/ itself.
-pytest already has its own reporting (--junit-xml), and
-resolve_ip_from_argv() reads sys.argv, which under a pytest run is pytest's
-own argv (file paths, -m expressions), not an appliance IP.
+pytest already has its own reporting (--junit-xml).
 """
 
 import os
@@ -20,28 +18,6 @@ import xml.etree.ElementTree as ET
 from datetime import datetime
 
 from .config import DEFAULT_RESULTS_DIR, Defaults
-
-_defaults: Defaults | None = None
-
-
-def _get_defaults() -> Defaults:
-    global _defaults
-    if _defaults is None:
-        _defaults = Defaults.from_json()
-    return _defaults
-
-
-def resolve_ip_from_argv():
-    """Resolve the target IP for a standalone script's CLI invocation.
-
-    Returns:
-        The first non-flag command-line argument if one was given, else the
-        NIOS_IP environment variable if set, else DEFAULT_IP from config.json.
-    """
-    for arg in sys.argv[1:]:
-        if not arg.startswith("-"):
-            return arg
-    return os.environ.get("NIOS_IP", _get_defaults().ip)
 
 
 class Run:
@@ -65,7 +41,7 @@ class Run:
     """
 
     def __init__(self, output_dir: str | None = None, script: str | None = None):
-        defaults = _get_defaults()
+        defaults = Defaults.from_json()
         base = output_dir or os.environ.get(
             "NIOS_TEST_OUTPUT_DIR", defaults.output_dir or DEFAULT_RESULTS_DIR,
         )

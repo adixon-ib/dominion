@@ -22,7 +22,7 @@ from .src.constants import (
 from .src.container import LocalNiosContainer, NiosContainer
 from .src.deploy import DeployError, DeployResult
 from .src.grid import Grid
-from .src.harness import Run, resolve_ip_from_argv
+from .src.harness import Run
 from .src.log import LogDump, LogMark, create_logger, resolve_log_file
 from .src.session import ConsoleConnectSession, ConsoleSession, ShellSession
 from .src.transport import (
@@ -71,7 +71,6 @@ __all__ = [
     "WapiError",
     "create_logger",
     "reset_console",
-    "resolve_ip_from_argv",
     "resolve_log_file",
     "ssh_reachable",
 ]

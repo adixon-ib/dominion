@@ -9,10 +9,8 @@ old test()/skip()/summary() harness) is gone — pytest + conftest.py
 fixtures/markers replace it, and only the config factories and up/down checks
 below are used.
 
-The old test()/skip()/summary()/resolve_ip_from_argv() harness has moved to
-dominion/src/harness.py (exported from the top-level dominion package) —
-it's the general run harness for any standalone dominion script, not just
-scripts/tickets/*/test_*.py.
+The Run harness lives in dominion/src/harness.py (exported from the
+top-level dominion package) for any standalone dominion script.
 """
 
 import os
