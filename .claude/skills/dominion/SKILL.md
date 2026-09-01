@@ -1,71 +1,79 @@
 ---
 name: dominion
-description: "dominion Python library for deploying files to and running commands against
-  NIOS appliances and NCC containers. Covers the 4 entry points (Appliance, LocalAppliance,
-  NiosContainer, LocalNiosContainer), transport-level operations, deploy methods, interactive
-  sessions, the test harness, and ticket test patterns. Use when writing test scripts,
-  deploying to appliances/NCC via Python, or working with the dominion library."
+description: "dominion is a Python library for running commands against NIOS appliances
+  and NCC containers. This skill documents the library's API and the best practices for
+  using it."
+when_to_use: "deploy to appliance, deploy to NCC, write a ticket test,
+  fresh install a grid, use an NCC container, write a script to use NIOS,
+  create an alias or function in bashrc"
 ---
 
 # dominion
 
-Python library for deploying files to and running commands against NIOS appliances and NCC containers. Same API works against a remote lab appliance (SSH) or a local NCC container (docker exec) by swapping the config.
+dominion is Python library for deploying files to and running commands against NIOS
+appliances and NCC containers. The same API targets a remote lab appliance or a local
+NCC container.
 
-## Setup
+Covers: picking an entry point, deploying files, interactive sessions, the
+test harness, WAPI calls, and how to structure and reuse generated code.
+
+## Ensure the library is installed
+
+Check if dominion is already installed (If not installed, clone and install):
 
 ```bash
-git clone <repo-url> dominion && cd dominion
-pip install -e .                  # on pip < 23: pip install -e . --no-build-isolation
-cp src/config.example.json src/config.json
-# edit config.json with your appliance details:
-#   hostname: your appliance hostname (e.g. vm-04-89)
-#   ip:       LAN_IPADDR from `get_lab_info -H <hostname>` (NOT MGMT_IPADDR)
-#   chroot:   your NCC chroot path (e.g. /local/91/aslan_chroot)
-#   worktree: your NIOS source worktree path
-#   container: your NCC container name
+python3 -c "import dominion" 2>/dev/null && echo "OK" || echo "NOT INSTALLED"
 ```
 
-`config.json` is optional. Without it, `import dominion` works but you must pass all values explicitly via config dataclasses. With it, `Defaults.from_json()` and the test harness pick up your defaults automatically.
+## Pick an entry point
 
-After `pip install -e .`, import directly -- no `sys.path` hacking needed:
+There are three entry points you construct directly. Never construct `NiosContainer`
+yourself. It is only ever handed back to you via `appliance.container`.
 
-```python
-from dominion import Appliance, ApplianceConfig, Run
-```
+- **`Appliance`** — the one you'll use most. Targets a real lab appliance over SSH.
+- **`LocalNiosContainer`** — use this whenever working with NCC
+  Talks to the container directly via `docker exec`.
+- **`LocalAppliance`** — used sparingly. The user should specify specifically when this
+  should be used.
 
-## The 4 Entry Points
+### Constructing `Appliance` and `LocalNiosContainer`
 
-### 1. `Appliance` -- Remote SSH appliance
+When using inline `from_config` declare each value as an uppercase variable
+near the top of the script/common file. Never a bare string literal into the
+`*Config` call.
 
-For lab appliances reachable via SSH. Auto-enables SSH on construction via `console_connect` if needed.
-
-**Config**: `ApplianceConfig`
-
-| Field | Type | Default | Notes |
-|---|---|---|---|
-| `hostname` | `str` | required | Used for `console_connect -H` |
-| `ip` | `str \| None` | `None` | SSH target. Falls back to `hostname` if None |
-| `chroot` | `str` | `"/local/91/aslan_chroot"` | Local chroot path for deploy source files |
-| `worktree` | `str \| None` | `None` | Git worktree path. Required for `deploy_token_py()` and `deploy_token_stats_consumer()` |
-| `container_name` | `str \| None` | `"nios"` | Docker container name on the appliance |
-| `log_level` | `str` | `"info"` | `off`, `info`, `debug`, `verbose`, `verbose-ex` |
-| `output_dir` | `str \| None` | `None` | Directory for log files |
-
-**Construction**:
+## Example:`Appliance` via `from_config`:
 
 ```python
-from dominion import Appliance, ApplianceConfig, Run
+from dominion import Appliance, ApplianceConfig
 
-run = Run()
+HOSTNAME = "vm-04-89"
+IP = "10.35.211.4"
+WORKTREE = "/path/to/my-branch"
+
 app = Appliance.from_config(ApplianceConfig(
-    hostname="vm-04-89",
-    ip="10.35.211.4",
-    log_level="info",
-    output_dir=run.output_dir,
+    hostname=HOSTNAME,
+    ip=IP,
+    worktree=WORKTREE,
 ))
 ```
 
-**Construction from `config.json`** via `Defaults.from_json()`. With no argument, reads `src/config.json` in the dominion repo. Pass a path to use a per-script config:
+## Example: `LocalNiosContainer` via `from_config`:
+
+```python
+from dominion import LocalNiosContainer, LocalContainerConfig
+
+CONTAINER_NAME = "balerion"
+WORKTREE = "/path/to/my-branch"
+
+container = LocalNiosContainer.from_config(LocalContainerConfig(
+    container_name=CONTAINER_NAME,
+    worktree=WORKTREE,
+))
+```
+
+**Construction from `config.json`** via `Defaults.from_json()`. With no argument,
+reads `src/config.json` in the dominion repo. Pass a path to use a per-script config:
 
 ```python
 from dominion import Appliance, ApplianceConfig, Defaults
@@ -82,122 +90,159 @@ app = Appliance.from_config(ApplianceConfig(
 ))
 ```
 
-**Deploy methods** (forwarded from container):
+## Sessions
 
-```python
-result = app.deploy_token_py()                   # all token Python files
-result = app.deploy_token_py(groups={"wapi"})    # specific groups only
-result = app.deploy_serial_console()             # binary from chroot
-result = app.deploy_shared_lib()                 # libibonedb_util.so from chroot
-result = app.deploy_token_stats_consumer()       # consumer script from worktree
-app.revert()                                     # restart container, restore originals
-```
+`ShellSession` and `ConsoleSession` both require SSH reachability, so they work
+on both `Appliance` and `LocalNiosContainer`. `ConsoleConnectSession` only works
+on `Appliance` objects, since it goes through the lab console server rather than
+SSH. There's no equivalent for a local NCC container. Prefer `ConsoleConnectSession`
+over `ConsoleSession` when working with an `Appliance`.
 
-**Sessions**:
+### ShellSession
+
+A bash shell inside the container. Use for anything that isn't the Infoblox CLI.
+Arbitrary commands, interactive prompts from non-CLI tools, etc.
 
 ```python
 with app.shell_session() as shell:
-    output = shell.run("pstree")
+    output = shell.run("cat /etc/hostname")
 
+    # Lower-level primitives for interactive flows
+    shell.sendline("some_command")
+    shell.expect("Enter value:")
+    shell.sendline("my_value")
+```
+
+### ConsoleSession
+
+The Infoblox CLI, connected via SSH. Simple and fast, but the SSH connection dies
+if NIOS reboots mid-session — don't use it for flows that reboot the appliance.
+
+```python
 with app.console_session() as console:
     output = console.run("show status")
+
+    console.sendline("set network")
+    console.expect("Enter IPv4 address")
+    console.sendline("10.0.0.1")
 ```
 
-**Transport-level access**:
+### ConsoleConnectSession
+
+The Infoblox CLI, connected out-of-band via the lab console server
+(`console_connect -H <hostname>`) instead of SSH. Use it for anything that
+reboots the appliance mid-flow — grid joins, network changes, membership
+wizards. Only works for lab-registered appliances.
+
+When a reboot is coming, don't try to keep one session open and `expect()`
+through the reboot. Close the session that sent the reboot-triggering command,
+then open a **new** session afterward and confirm the appliance came back (e.g.
+`show status`). Example using a grid join:
 
 ```python
-transport = app.container._transport
+with member.console_connect_session() as console:
+    console.sendline("set membership")
+    console.expect("Master VIP")
+    console.sendline(master_ip)
+    console.expect("Grid Name")
+    console.sendline(grid_name)
+    console.expect("Shared Secret")
+    console.sendline(shared_secret)
+    console.expect("Is this correct")
+    console.sendline("y")
+    console.expect("Are you sure")
+    console.sendline("y")
+# session closed here; member is now rebooting
 
-rc, stdout, stderr = transport.run("cat /etc/resolv.conf")
-rc, stdout, stderr = transport.run("test -f /some/file", check=False)
-transport.upload("/local/path/file.py", "/container/path/file.py")
-rc, stdout, stderr = transport.run_on_host("docker ps")
-transport.upload_to_host("/local/path/binary", "/remote/host/path/binary")
+# Fresh session to validate the member rebooted and joined.
+with member.console_connect_session(timeout=600) as console:
+    output = console.run("show status")
+    assert "Grid Master IP" in output, f"Member didn't join grid: {output}"
 ```
 
-### 2. `LocalAppliance` -- Local NCC container
+`ConsoleConnectSession._open()` has stale-data-draining logic built
+specifically for reconnecting cleanly. Opening a new session after a reboot
+gets you that clean-reconnect handling for free.
 
-For local NCC/slot containers. If `config.ip` is `None`, `from_config` runs `set_network()` (~5-7 min) to configure networking.
+## The `Run` test harness
 
-**Config**: `LocalApplianceConfig`
+`Run` is the structured runner for standalone scripts. It tracks
+pass/fail/skip, writes `summary.txt` + `junit.xml`, and dumps `infoblox.log` for
+any target you register. **Use Run:** standalone for scripts with multiple steps you
+want tracked as pass/fail/skip, with auto summary/junit/log-dump.
+**Don't use Run:** for utility scripts (deploy/configure/query) with no real steps
+to track or useful scripts you'll reuse day-to-day. Just call the API directly.
 
-| Field | Type | Default | Notes |
-|---|---|---|---|
-| `container_name` | `str` | required | Slot name |
-| `chroot` | `str` | `"/local/91/aslan_chroot"` | Local chroot path |
-| `worktree` | `str \| None` | `None` | Git worktree path |
-| `ip` | `str \| None` | `None` | Pass known IP to skip `set_network()` |
-| `log_level` | `str` | `"info"` | |
-| `output_dir` | `str \| None` | `None` | |
+Best practices:
+
+- **Construct `run = Run()` once, near the top of the main script**, before building
+  any `Appliance`/`LocalNiosContainer`
+- **Register every target with `run.add(...)` right after constructing it**
+- **Name phases as a narrative, numbered in execution order** — Ex: `"Phase 3a WAPI: connected"`
+- **Gate optional phases with an env var and `run.skip(name, reason)`**, checked
+  as `os.environ.get("SKIP_X", "0") == "1"` (`SKIP_DEPLOY`, `SKIP_CLEANUP`, `SKIP_SETUP`, ...).
+- **`run.test("name", lambda: fn(arg))`** — prefer to use zero-arg lambda
+
+Wrap the whole body in `try/finally`:
 
 ```python
-from dominion import LocalAppliance, LocalApplianceConfig, Run
-
 run = Run()
-app = LocalAppliance.from_config(LocalApplianceConfig(
-    container_name="myslot",
-    chroot="/local/91/chroots/myslot",
-    worktree="/path/to/my-branch",
-    ip=None,
-    log_level="info",
-    output_dir=run.output_dir,
-))
+app = Appliance.from_config(ApplianceConfig(..., output_dir=run.output_dir))
+run.add(app)
+
+try:
+    ref, before, after = run.test("Phase 1: read baseline", lambda: get_baseline(transport))
+    run.test("Phase 2: verify change", lambda: verify_change(transport, ref, before, after))
+finally:
+    run.summary()
 ```
 
-Same deploy/session/transport API as `Appliance`. Transport uses `docker exec` and `cat | tee` instead of SSH.
+## Reuse code, split files by role
 
-### 3. `NiosContainer` -- Direct SSH container access
+Before writing a new helper, check whether it already exists:
+- **`dominion/actions/`** — reusable, ticket-independent operations
+- **Another ticket's `common.py`/`*_ops.py`** — a similar-enough problem
+  (polling for SSH/WAPI readiness, WAPI query helpers, deploy-and-verify
+  patterns) has often already been solved in a sibling `scripts/tickets/*/`
+  directory.
 
-Lower-level than `Appliance`. No SSH auto-enable. Access via `app.container`:
+When a scripts's logic grows past a single file or is becoming large, split
+by role rather than growing one flat script.
+
+- **Main**: Thin entry point.
+  Builds the `Appliance`/`LocalNiosContainer`, constructs `Run`, and wires
+  phases together via `run.test(...)`. Imports its logic from the other two
+  files rather than defining it inline.
+- **Implementation**: The actual step functions the main file calls.
+  Can be split further by concern (e.g. `NIOSRFE-10458` has both `ops.py`
+  for container operations and `wapi_ops.py` for WAPI verification).
+- **Common** (`common.py`) — constants and shared data used by both main and
+  implementation files: `HOSTNAME`, `WORKTREE`, endpoint URLs, test fixtures.
+  Keeps configuration in one place instead of scattered across files.
+
+## WAPI API
+
+`Appliance` exposes a `.wapi` property returning a `WapiClient` for making WAPI calls inside the container
+Always prefer using this API over manually constructing it:
 
 ```python
-container = app.container
-result = container.deploy_token_py()
-container.restart()
+from dominion import Appliance, ApplianceConfig, WapiClient
+
+app = Appliance.from_config(ApplianceConfig(hostname=HOSTNAME, ip=IP))
+
+result = app.wapi.get("/grid")
+result = app.wapi.post("/record:host", data={"name": "test.example.com", "ipv4addrs": [{"ipv4addr": "10.0.0.1"}]})
+result = app.wapi.put("/record:host/ref", data={"name": "updated.example.com"})
+result = app.wapi.delete("/record:host/ref")
 ```
 
-### 4. `LocalNiosContainer` -- Direct local container access
-
-Local counterpart. Adds `set_network()` and `get_container_ip()`.
-
-**Config**: `LocalContainerConfig`
-
-| Field | Type | Default | Notes |
-|---|---|---|---|
-| `container_name` | `str` | required | |
-| `chroot` | `str` | `"/local/91/aslan_chroot"` | |
-| `worktree` | `str \| None` | `None` | |
-| `log_level` | `str` | `"info"` | |
-| `output_dir` | `str \| None` | `None` | |
-
-```python
-from dominion import LocalNiosContainer, LocalContainerConfig
-
-container = LocalNiosContainer.from_config(LocalContainerConfig(
-    container_name="myslot",
-    chroot="/local/91/chroots/myslot",
-    worktree="/path/to/my-branch",
-    log_level="info",
-))
-
-ip = container.set_network()   # ~5-7 min: console + reboot + WAPI poll + host route
-ip = container.get_container_ip()
-```
-
-## When to use which entry point
-
-| Scenario | Entry point |
-|---|---|
-| Test against a lab appliance | `Appliance` |
-| Test against a local NCC slot | `LocalAppliance` |
-| Container ops only, SSH already guaranteed | `NiosContainer` (via `app.container`) |
-| Container ops on local NCC, no appliance wrapper | `LocalNiosContainer` |
-
-`Appliance` guarantees SSH works (auto-enables on construction). `LocalAppliance` guarantees a valid IP (runs `set_network()` if needed). The container variants skip those guarantees for speed.
+Read the full implemenation when working with WAPI for more info.
 
 ## Transport API
 
-Both `SSHDockerTransport` and `LocalDockerTransport` implement the same protocol:
+Both `SSHDockerTransport` and `LocalDockerTransport` implement the same protocol.
+`transport.run()` is the workhorse for most scripts — extract it via
+`app.container._transport` and use it directly for low-level container commands.
 
 | Method | What it does |
 |---|---|
@@ -209,213 +254,21 @@ Both `SSHDockerTransport` and `LocalDockerTransport` implement the same protocol
 | `host_checksum(path)` | md5sum of a file on the host |
 | `is_container_running()` | Check if the Docker container is running |
 
-## Deploy Methods
+## Log Levels
 
-All return `DeployResult(artifact, changed, local_hash, remote_hash, restarted, details)`.
+Set via the `log_level` field on `ApplianceConfig`, `LocalApplianceConfig`,
+`LocalContainerConfig`, etc. Four levels, each a superset of the last:
 
-| Method | Source | Restart |
-|---|---|---|
-| `deploy_token_py(groups, branding_source, skip_restart)` | Python files from worktree. Groups: `branding`, `ibap`, `pyabs`, `wapi` | Stops `admin-httpd` via pmc |
-| `deploy_serial_console()` | Binary from chroot | `killall serial_console` |
-| `deploy_shared_lib(local_subpath, dest, restart_target, backup)` | `.so` from chroot (default: `libibonedb_util.so`) | `killall <target>` |
-| `deploy_token_stats_consumer(skip_restart)` | Consumer script from worktree | `token_stats_consumer_control` stop/start |
-| `deploy_clusterd()` | Binary from chroot | `killall clusterd` |
-| `deploy_nios_model_cloud_init()` | cloud-init module + config from worktree | None (module requests its own restart) |
+- **`off`** — nothing.
+- **`info`** (default) — commands being run (summarized) and their stdout.
+  Enough to see what dominion is doing without noise.
+- **`debug`** — full command strings, exit codes, stdout/stderr, checksums,
+  upload paths. Use when troubleshooting a failing deploy or command.
+- **`verbose`** — everything in `debug` plus pexpect session internals
+  (pattern matches, byte counts). Use sparingly, for deep debugging.
 
-- `deploy_token_py`, `deploy_token_stats_consumer`, and `deploy_nios_model_cloud_init` require `worktree` in the config.
-- `deploy_serial_console`, `deploy_shared_lib`, and `deploy_clusterd` require a prior `make install`.
+## Further reference
 
-## Sessions
-
-Sessions are pexpect-backed context managers.
-
-### ShellSession
-
-```python
-with app.shell_session() as shell:
-    output = shell.run("cat /etc/hostname")
-
-    # Lower-level for interactive flows
-    shell.sendline("some_command")
-    shell.expect("Enter value:")
-    shell.sendline("my_value")
-```
-
-### ConsoleSession vs ConsoleConnectSession
-
-`ConsoleSession` connects via SSH (`ssh admin@<ip>`). Dies if NIOS reboots.
-
-`ConsoleConnectSession` connects via lab console server (`console_connect -H <hostname>`). Out-of-band serial connection that survives NIOS reboots. Only works for lab-registered appliances.
-
-Both share the same API: `run()`, `sendline()`, `expect()`, `expect_one_of()`.
-
-```python
-# ConsoleSession -- in-band, SSH-based
-with app.console_session() as console:
-    output = console.run("show status")
-
-# ConsoleConnectSession -- out-of-band, survives reboots
-with app.console_connect_session() as console:
-    output = console.run("show status")
-
-    # Interactive multi-step flow
-    console.sendline("set network")
-    console.expect("Enter IPv4 address")
-    console.sendline("10.0.0.1")
-
-    # expect_one_of returns the index of which pattern matched
-    idx = console.expect_one_of(["Enter DSCP", "Configure IPv6"])
-```
-
-**Waiting through a NIOS reboot** (e.g. grid join). The telnet stays alive through a NIOS-level reboot:
-
-```python
-with app.console_connect_session() as console:
-    console.sendline("set membership")
-    console.expect("Master VIP")
-    console.sendline(master_ip)
-    # ... finish wizard, NIOS reboots ...
-    console.expect("login:", timeout=600)
-```
-
-**Reconnecting after a VM power cycle**. Poweroff kills the telnet, so open a new session with a long timeout. `_open()` waits for boot, authenticates, and lands at `Infoblox >`:
-
-```python
-with app.console_connect_session(timeout=300) as console:
-    output = console.run("show status")
-```
-
-Session `run()` does not accept `check=`. It returns the text between sending the command and seeing the next prompt. Assert on the returned text. For exit-code checking, use `transport.run()`.
-
-## Test Harness (`Run`)
-
-For standalone scripts (not pytest):
-
-```python
-from dominion import Appliance, ApplianceConfig, Run
-
-run = Run()
-app = Appliance.from_config(ApplianceConfig(
-    hostname="vm-04-89", ip="10.35.211.4", output_dir=run.output_dir,
-))
-transport = app.container._transport
-
-def my_test(t):
-    rc, out, _ = t.run("pgrep -f some_process")
-    assert out.strip(), "process not running"
-
-run.test("check process", lambda: my_test(transport))
-run.skip("other check", reason="not applicable")
-run.summary(app)   # prints totals, writes summary.txt + junit.xml
-```
-
-`Run` output directory precedence (highest first): explicit `Run(output_dir=...)`, `NIOS_TEST_OUTPUT_DIR` env var, `config.json` `output_dir` field, `DEFAULT_RESULTS_DIR` (repo-relative `results/`).
-
-## Config via `Defaults.from_json()`
-
-`src/config.json` is gitignored. Each user creates their own from the template:
-
-```bash
-cp src/config.example.json src/config.json
-```
-
-```python
-from dominion import Defaults
-d = Defaults.from_json()                           # reads src/config.json
-d = Defaults.from_json("/path/to/my/config.json")  # or a custom path
-```
-
-Fields: `hostname`, `ip`, `chroot`, `worktree`, `container`, `log_level`, `output_dir`. All optional.
-
-Scripts can keep their own `config.json` alongside themselves instead of sharing the repo-wide one. For multi-target scripts (e.g. GM + member, or appliance + NCC), call `from_json()` with different paths:
-
-```python
-from dominion import Appliance, ApplianceConfig, Defaults
-
-gm = Defaults.from_json("configs/gm.json")
-member = Defaults.from_json("configs/member.json")
-
-gm_app = Appliance.from_config(ApplianceConfig(
-    hostname=gm.hostname, ip=gm.ip, worktree=gm.worktree,
-))
-member_app = Appliance.from_config(ApplianceConfig(
-    hostname=member.hostname, ip=member.ip, worktree=member.worktree,
-))
-```
-
-Each config file has the same schema. The repo-wide `src/config.json` is just the default when no path is given.
-
-## Grid and Build
-
-### `Grid` -- Grid deployment
-
-```python
-from dominion import Grid, GridConfig
-
-grid = Grid.from_config(GridConfig(
-    topology="2member",
-    file="/path/to/image.bin",
-))
-gm = grid.gm           # Appliance for the GM
-members = grid.members  # list of Appliance for members
-```
-
-### `NiosBuild` -- Build wrapper
-
-```python
-from dominion import NiosBuild, BuildConfig
-
-build = NiosBuild.from_config(BuildConfig(
-    worktree="/path/to/my-branch",
-    slot="myslot",
-))
-build.quick()   # touch skip_slow && make install (~5-15 min)
-build.full()    # installclean + build-env + install (~60 min)
-build.clean()   # make installclean
-```
-
-## Error Types
-
-| Exception | When |
-|---|---|
-| `TransportError` | Transport-level failure (timeout, command not found) |
-| `CommandError(TransportError)` | Non-zero exit code with `check=True`. Has `.cmd`, `.exit_code`, `.stdout`, `.stderr` |
-| `DeployError(RuntimeError)` | Deploy failure (missing file, hash mismatch). Has `.artifact` |
-
-## Tests
-
-Run from the repo root:
-
-```bash
-pytest                                                              # unit tests only (safe)
-cd integration_tests && pytest -m "appliance and not destructive"   # safe appliance tests
-cd integration_tests && pytest -m "ncc and not destructive"         # safe NCC tests
-cd integration_tests && pytest -m "destructive and appliance"       # opt-in: deploys real files
-```
-
-Root `pytest.ini` scopes bare `pytest` to `unit_tests/` only. Always combine marker expressions with `not destructive` unless you intend to deploy/reboot. Some tests carry both `appliance` and `destructive` markers; using `-m appliance` alone overrides the safety default in `addopts`.
-
-## WAPI Client
-
-`Appliance` and `LocalAppliance` expose a `.wapi` property returning a `WapiClient` for making WAPI calls inside the container:
-
-```python
-from dominion import Appliance, ApplianceConfig, WapiClient
-
-app = Appliance.from_config(ApplianceConfig(hostname="vm-04-89", ip="10.35.211.4"))
-
-result = app.wapi.get("/grid")
-result = app.wapi.post("/record:host", data={"name": "test.example.com", "ipv4addrs": [{"ipv4addr": "10.0.0.1"}]})
-result = app.wapi.put("/record:host/ref", data={"name": "updated.example.com"})
-result = app.wapi.delete("/record:host/ref")
-```
-
-`WapiClient` runs curl inside the container (localhost). Methods: `get()`, `post()`, `put()`, `delete()`, `request()`. All accept `check=True` (raises `WapiError` on failure).
-
-## Env Vars
-
-| Variable | Effect |
-|---|---|
-| `NIOS_IP=10.x.y.z` | Override target IP |
-| `NIOS_TEST_OUTPUT_DIR=/path` | Override `Run` harness results output directory |
-| `DOMINION_OUTPUT_DIR=/path` | Override integration test results output directory |
+- **`references/deploy.md`** — full Deploy API table.
+- **`references/log-operations.md`** — mark/dump/count log API.
+- **`references/grid.md`** — `Grid`/`GridConfig` for deploying a lab grid.
