@@ -17,14 +17,6 @@ NCC container.
 Covers: picking an entry point, deploying files, interactive sessions, the
 test harness, WAPI calls, and how to structure and reuse generated code.
 
-## Ensure the library is installed
-
-Check if dominion is already installed (If not installed, clone and install):
-
-```bash
-python3 -c "import dominion" 2>/dev/null && echo "OK" || echo "NOT INSTALLED"
-```
-
 ## Pick an entry point
 
 There are three entry points you construct directly. Never construct `NiosContainer`
@@ -63,30 +55,12 @@ app = Appliance.from_config(ApplianceConfig(
 ```python
 from dominion import LocalNiosContainer, LocalContainerConfig
 
-CONTAINER_NAME = "balerion"
+CHROOT = "/path/to/chroot"
 WORKTREE = "/path/to/my-branch"
 
 container = LocalNiosContainer.from_config(LocalContainerConfig(
-    container_name=CONTAINER_NAME,
+    chroot=CHROOT,
     worktree=WORKTREE,
-))
-```
-
-**Construction from `config.json`** via `Defaults.from_json()`. With no argument,
-reads `src/config.json` in the dominion repo. Pass a path to use a per-script config:
-
-```python
-from dominion import Appliance, ApplianceConfig, Defaults
-
-d = Defaults.from_json()
-
-app = Appliance.from_config(ApplianceConfig(
-    hostname=d.hostname,
-    ip=d.ip,
-    chroot=d.chroot,
-    worktree=d.worktree,
-    log_level=d.log_level,
-    output_dir=d.output_dir,
 ))
 ```
 
@@ -182,8 +156,7 @@ Best practices:
 - **Gate optional phases with an env var and `run.skip(name, reason)`**, checked
   as `os.environ.get("SKIP_X", "0") == "1"` (`SKIP_DEPLOY`, `SKIP_CLEANUP`, `SKIP_SETUP`, ...).
 - **`run.test("name", lambda: fn(arg))`** — prefer to use zero-arg lambda
-
-Wrap the whole body in `try/finally`:
+- Wrap the whole body in `try/finally` to ensure proper test results if there is an error
 
 ```python
 run = Run()
@@ -270,5 +243,6 @@ Set via the `log_level` field on `ApplianceConfig`, `LocalApplianceConfig`,
 ## Further reference
 
 - **`references/deploy.md`** — full Deploy API table.
-- **`references/log-operations.md`** — mark/dump/count log API.
+- **`references/log-operations.md`** — mark/dump/count infloblox.log / generic
+  log API. Always check before hand-rolling a grep/tail shell command for logs.
 - **`references/grid.md`** — `Grid`/`GridConfig` for deploying a lab grid.
