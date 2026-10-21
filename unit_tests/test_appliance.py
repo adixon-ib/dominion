@@ -192,6 +192,7 @@ def ensure(monkeypatch):
         ssh = []          # successive ssh_reachable results (last repeats)
         port_open = False
         addkeys = [True]  # successive addkeys results (last repeats)
+        wapi_timeouts = []
         wapi_error = None  # RuntimeError message from wait_for_wapi, or None for ready
         console_error = None
 
@@ -210,8 +211,11 @@ def ensure(monkeypatch):
     monkeypatch.setattr(
         appliance_mod, "time", type("T", (), {"time": staticmethod(lambda: clock["t"]), "sleep": staticmethod(sleep)}),
     )
+    Env.wapi_timeouts = []
+
     def wapi(ip, logger, timeout=None):
         calls.append("wapi")
+        Env.wapi_timeouts.append(timeout)
         if Env.wapi_error:
             raise RuntimeError(Env.wapi_error)
 
@@ -257,14 +261,14 @@ def test_ensure_ssh_skips_power_cycle_when_addkeys_fixes_auth(ensure):
 def test_ensure_ssh_falls_back_to_power_cycle_when_cheap_addkeys_fails(ensure):
     ensure.ssh = [False, True]
     ensure.port_open = True
-    ensure.addkeys = [False] * 6 + [True]
+    ensure.addkeys = [False, True]
 
     ensure.a._ensure_ssh()
 
-    # Quick attempt exhausts its bounded retries, then power-cycle and a fresh gate + loop.
-    assert ensure.calls.index("console") > ensure.calls.index("addkeys")
-    assert ensure.calls[ensure.calls.index("console") + 1] == "wapi"
-    assert ensure.calls[-2:] == ["addkeys", "ssh"]
+    # Quick path is a single attempt, then power-cycle and a fresh gate + loop.
+    assert ensure.calls == ["ssh", "wapi", "addkeys", "console", "wapi", "addkeys", "ssh"]
+    # Live numbers: 60s WAPI wait on the quick path, 360s after the power-cycle.
+    assert ensure.wapi_timeouts == [60, 360]
 
 
 def test_ensure_ssh_no_cheap_addkeys_when_port_closed(ensure):
@@ -283,6 +287,45 @@ def test_ensure_ssh_addkeys_failure_names_step(ensure):
         ensure.a._ensure_ssh()
 
     assert "ssh" not in ensure.calls[1:]  # never probes ssh after a failed addkeys
+
+
+def test_ensure_ssh_console_error_is_first_line_only(ensure, monkeypatch):
+    ensure.ssh = [False]
+    ensure.wapi_error = "WAPI not ready\nsecond wapi line"
+    monkeypatch.setattr(
+        appliance_mod.subprocess, "run",
+        lambda *a, **k: type("R", (), {"returncode": 0})(),
+    )
+    monkeypatch.setattr(
+        appliance_mod.pexpect, "spawn",
+        lambda *a, **k: (_ for _ in ()).throw(Exception("console busy\nTraceback: noisy detail")),
+    )
+    monkeypatch.setattr(
+        ensure.a, "_enable_ssh_via_console",
+        Appliance._enable_ssh_via_console.__get__(ensure.a),
+    )
+
+    with pytest.raises(RuntimeError) as exc:
+        ensure.a._ensure_ssh()
+
+    msg = str(exc.value)
+    assert "console enable failed (console busy)" in msg
+    assert "WAPI not ready" in msg
+    assert "noisy detail" not in msg and "second wapi line" not in msg
+
+
+def test_enable_ssh_reboot_system_timeout_names_step(monkeypatch):
+    import subprocess
+
+    def run(cmd, **k):
+        if cmd[-1] == "poweron":
+            raise subprocess.TimeoutExpired(cmd, 30)
+        return type("R", (), {"returncode": 0})()
+
+    monkeypatch.setattr(appliance_mod.subprocess, "run", run)
+    monkeypatch.setattr(appliance_mod.time, "sleep", lambda s: None)
+
+    assert _bare_appliance()._enable_ssh_via_console() == "reboot_system poweron timed out after 30s"
 
 
 def test_ensure_ssh_wapi_never_ready_skips_addkeys_and_names_step(ensure):
@@ -384,6 +427,22 @@ def test_wait_for_wapi_returns_on_200(monkeypatch):
     )
 
     appliance_mod.wait_for_wapi("10.0.0.1", LOGGER, timeout=60)
+
+
+def test_wait_for_wapi_curl_argv(monkeypatch):
+    seen = []
+    monkeypatch.setattr(
+        appliance_mod.subprocess, "run",
+        lambda cmd, **k: seen.append(cmd) or type("R", (), {"stdout": "200"})(),
+    )
+
+    appliance_mod.wait_for_wapi("10.0.0.1", LOGGER, timeout=60)
+
+    assert seen == [[
+        "curl", "-sk", "-o", "/dev/null", "-w", "%{http_code}",
+        "-u", "admin:infoblox",
+        f"https://10.0.0.1/wapi/{appliance_mod.WAPI_VERSION}/grid",
+    ]]
 
 
 def test_wait_for_wapi_raises_on_timeout(monkeypatch):

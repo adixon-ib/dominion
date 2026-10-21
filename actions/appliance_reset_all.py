@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import re
 import subprocess
-import time
 
 from dominion.src.appliance import Appliance, run_addkeys, wait_for_wapi
 from dominion.src.constants import (

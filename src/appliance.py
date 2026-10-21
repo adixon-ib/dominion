@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING
 
 from .config import ApplianceConfig, LocalApplianceConfig
 from .constants import (
+    ADDKEYS_QUICK_RETRY_TIMEOUT,
     ADDKEYS_QUICK_WAPI_TIMEOUT,
     ADDKEYS_RETRY_INTERVAL,
     ADDKEYS_RETRY_TIMEOUT,
@@ -19,6 +20,7 @@ from .constants import (
     NIOS_REBOOT_TIMEOUT,
     NIOS_WAPI_POLL_INTERVAL,
     NIOS_WAPI_READY_TIMEOUT,
+    REBOOT_SYSTEM_TIMEOUT,
     WAPI_VERSION,
 )
 from .container import NiosContainer, LocalNiosContainer
@@ -286,17 +288,19 @@ class Appliance(_ApplianceBase):
         ip = self._ip or self._hostname
         self._logger.info("SSH unavailable on %s — power-cycling and enabling via console", ip)
 
-        self._logger.info("Powering off %s", self._hostname)
-        subprocess.run(
-            ["reboot_system", "-H", self._hostname, "-a", "poweroff"],
-            timeout=30,
-        )
-        time.sleep(5)
-        self._logger.info("Powering on %s", self._hostname)
-        subprocess.run(
-            ["reboot_system", "-H", self._hostname, "-a", "poweron"],
-            timeout=30,
-        )
+        for action in ("poweroff", "poweron"):
+            self._logger.info("reboot_system %s %s", action, self._hostname)
+            try:
+                subprocess.run(
+                    ["reboot_system", "-H", self._hostname, "-a", action],
+                    timeout=REBOOT_SYSTEM_TIMEOUT,
+                )
+            except subprocess.TimeoutExpired:
+                msg = f"reboot_system {action} timed out after {REBOOT_SYSTEM_TIMEOUT}s"
+                self._logger.info("%s on %s", msg, self._hostname)
+                return msg
+            if action == "poweroff":
+                time.sleep(5)
 
         try:
             reset_console(self._hostname)
@@ -342,15 +346,15 @@ class Appliance(_ApplianceBase):
         self._logger.info("Console setup done on %s", ip)
         return None
 
-    def _restore_ssh(self, ip: str, wapi_timeout: int) -> str | None:
-        """Wait for WAPI, then retry addkeys + SSH check. Returns None on success, else the failed step."""
+    def _restore_ssh(self, ip: str, wapi_timeout: int, retry_timeout: int) -> str | None:
+        """Wait for WAPI, then retry addkeys + SSH check for retry_timeout. Returns None on success, else the failed step."""
         try:
             wait_for_wapi(ip, self._logger, timeout=wapi_timeout)
         except RuntimeError as e:
             return _first_line(e)
 
         # Interval stays well above the 10 conns/60s/source-IP SSH rate limit.
-        deadline = time.time() + ADDKEYS_RETRY_TIMEOUT
+        deadline = time.time() + retry_timeout
         attempts = 0
         addkeys_ok = False
         while True:
@@ -365,7 +369,7 @@ class Appliance(_ApplianceBase):
 
         if addkeys_ok:
             return f"SSH login still failing after addkeys succeeded ({attempts} attempts)"
-        return f"addkeys failed on all {attempts} attempts over {ADDKEYS_RETRY_TIMEOUT}s"
+        return f"addkeys failed on all {attempts} attempts"
 
     def _ensure_ssh(self) -> None:
         ip = self._ip or self._hostname
@@ -376,7 +380,7 @@ class Appliance(_ApplianceBase):
         # Port open but login failed means keys are missing, not that SSH is off.
         if ssh_port_open(ip):
             self._logger.info("SSH port open but login failed on %s — trying addkeys before power-cycle", ip)
-            failed = self._restore_ssh(ip, ADDKEYS_QUICK_WAPI_TIMEOUT)
+            failed = self._restore_ssh(ip, ADDKEYS_QUICK_WAPI_TIMEOUT, ADDKEYS_QUICK_RETRY_TIMEOUT)
             if failed is None:
                 return
             self._logger.info("addkeys alone did not restore SSH on %s (%s) — power-cycling", ip, failed)
@@ -385,7 +389,7 @@ class Appliance(_ApplianceBase):
         console_error = self._enable_ssh_via_console()
         if console_error is not None:
             steps.append(f"console enable failed ({console_error})")
-        failed = self._restore_ssh(ip, NIOS_WAPI_READY_TIMEOUT)
+        failed = self._restore_ssh(ip, NIOS_WAPI_READY_TIMEOUT, ADDKEYS_RETRY_TIMEOUT)
         if failed is None:
             return
         steps.append(failed)
