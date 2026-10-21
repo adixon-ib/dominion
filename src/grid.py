@@ -160,6 +160,7 @@ def _parse_tag_file(tag_file: str) -> dict[str, dict[str, str]]:
         result["master"] = {
             "hostname": master.get("UNIT_1_ID") or "",
             "ip": master.get("UNIT_1_IPADDR") or "",
+            "image": master.get("image") or "",
         }
 
     i = 0
