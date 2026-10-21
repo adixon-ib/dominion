@@ -73,9 +73,17 @@ def test_preflight_already_enabled():
 
 
 @pytest.mark.parametrize("status", [400, 404])
-def test_preflight_old_wapi_counts_as_not_enabled(status):
+def test_preflight_old_wapi_reports_too_old(status):
     app = _app(gridwide=WapiError("GET", "ipc:gridwide", status, "unknown object"))
-    assert lic.ipc_preflight(app)["enabled"] is False
+    with pytest.raises(RuntimeError, match=r"WAPI too old for ipc \(v2.15\)"):
+        lic.ipc_preflight(app)
+
+
+@pytest.mark.parametrize("limit", ["TE-926", "V926"])
+def test_preflight_model_not_gm_capable(limit):
+    app = _app(lics=[{"type": "NIOS", "limit": limit}])
+    with pytest.raises(RuntimeError, match="cannot be a Grid Master"):
+        lic.ipc_preflight(app)
 
 
 def test_preflight_other_wapi_error_propagates():

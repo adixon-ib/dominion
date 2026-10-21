@@ -34,23 +34,30 @@ def _nios_model(lics: list[dict]) -> str:
 def ipc_preflight(app: Appliance) -> dict:
     """Check the prerequisites for enabling IPc mode.
 
-    Checks, in order: a NIOS model is configured (NIOS license limit), IPc is
-    not already enabled (ipc:gridwide returns rows only when enabled), and the
-    grid has an lpc_uid. Raises app.wapi_version to v2.15 if lower, since
-    ipc:gridwide needs it; an older WAPI that lacks ipc:gridwide counts as not
-    enabled.
+    Checks, in order: a NIOS model is configured and GM capable, IPc is not
+    already enabled (ipc:gridwide returns rows only when enabled), and the grid
+    has an lpc_uid. Raises app.wapi_version to v2.15 if lower, since
+    ipc:gridwide needs it.
+
+    The model check is a license-based proxy (NIOS license limit) for
+    ipc:bundle's _check_model, which reads the hardware type and also rejects
+    reporting-capable models; only the cheap "IB-" prefix test is done here.
+    It does not mirror the CLI, which prompts for a model instead of rejecting.
 
     Returns:
         {"model": str, "enabled": False, "lpc_uid": str}
 
     Raises:
-        RuntimeError: On the first failed check.
+        RuntimeError: On the first failed check, or if the WAPI is too old for
+            ipc (ipc:gridwide answers 400 or 404).
     """
     host = app.hostname
 
     model = _nios_model(licenses(app))
     if model in _NO_MODELS or "IB-FLEX" in model:
         raise RuntimeError(f"{host}: no NIOS model configured (NIOS license limit {model!r})")
+    if not model.startswith("IB-"):
+        raise RuntimeError(f"{host}: model {model!r} cannot be a Grid Master (needs IB- prefix)")
 
     if _version_tuple(app.wapi_version) < _version_tuple(_BUNDLE_WAPI_VERSION):
         app.wapi_version = _BUNDLE_WAPI_VERSION
@@ -59,7 +66,7 @@ def ipc_preflight(app: Appliance) -> dict:
     except WapiError as e:
         if e.status not in (400, 404):
             raise
-        rows = []
+        raise RuntimeError(f"{host}: WAPI too old for ipc ({app.wapi_version})") from e
     if rows:
         raise RuntimeError(f"{host}: IPc already enabled (ipc:gridwide returned {len(rows)} rows)")
 
