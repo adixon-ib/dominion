@@ -11,3 +11,5 @@ NIOS_CONSOLE_PASSWORD = "infoblox"
 
 # WAPI
 WAPI_VERSION = "v2.12"
+TOKEN_BUNDLE_ENABLE_TIMEOUT = 900  # seconds for ipc:bundle migration to finish
+TOKEN_BUNDLE_POLL_INTERVAL = 5     # seconds between ipc:bundle status polls

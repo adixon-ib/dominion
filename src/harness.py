@@ -9,6 +9,7 @@ Do not use this module from anything under integration_tests/ itself.
 pytest already has its own reporting (--junit-xml).
 """
 
+import json
 import os
 import socket
 import sys
@@ -52,6 +53,7 @@ class Run:
         self._skipped = 0
         self._results: list[dict] = []
         self._targets: list = []
+        self._start = datetime.now()
 
     def add(self, target) -> None:
         """Register a target (Appliance, LocalAppliance, NiosContainer, or
@@ -138,6 +140,7 @@ class Run:
         print(f"{'=' * 60}")
         if self.output_dir:
             self._write_junit(primary)
+            self._write_results_json()
             files = sorted(os.listdir(self.output_dir)) if os.path.isdir(self.output_dir) else []
             if "summary.txt" not in files:
                 files.append("summary.txt")
@@ -205,6 +208,20 @@ class Run:
         os.makedirs(self.output_dir, exist_ok=True)
         with open(summary_path, "w") as f:
             f.write("\n".join(lines) + "\n")
+
+    def _write_results_json(self):
+        data = {
+            "script": self.script,
+            "start": self._start.isoformat(),
+            "end": datetime.now().isoformat(),
+            "targets": [self._target(t) for t in self._targets],
+            "passed": self._passed,
+            "failed": self._failed,
+            "skipped": self._skipped,
+            "results": self._results,
+        }
+        with open(os.path.join(self.output_dir, "results.json"), "w") as f:
+            json.dump(data, f, indent=2)
 
     def _write_junit(self, app):
         """Write output_dir/junit.xml in the same shape pytest's own

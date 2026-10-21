@@ -34,6 +34,7 @@ TEST_CLASSES = {
     "grid_ipc_pool": "infoblox.test.one.wapi.test_grid_token_pool.WapiGridIpcPool215",
     "ipc_audit_log": "infoblox.test.one.wapi.test_token_audit_log.WapiIpcAuditLog215",
     "ipc_sync_status": "infoblox.test.one.wapi.test_token_sync_status.WapiIpcSyncStatus215",
+    "ipc_bundle": "infoblox.test.one.wapi.test_token_bundle.WapiIpcBundle215",
 }
 TEST_RUN_TIMEOUT = 300  # run_py_tests can run well past the transport's 30s default
 

@@ -31,6 +31,7 @@ TEST_FILES = [
     "test_token_alert_threshold.py",
     "test_token_audit_log.py",
     "test_token_sync_status.py",
+    "test_token_bundle.py",
     "token_test_common.py",
 ]
 

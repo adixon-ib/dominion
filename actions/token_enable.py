@@ -7,7 +7,14 @@ import os
 import shutil
 import tarfile
 import tempfile
+import time
 from typing import TYPE_CHECKING
+
+from dominion.src.constants import (
+    TOKEN_BUNDLE_ENABLE_TIMEOUT,
+    TOKEN_BUNDLE_POLL_INTERVAL,
+)
+from dominion.src.wapi import WapiError
 
 if TYPE_CHECKING:
     from dominion import Appliance
@@ -69,6 +76,25 @@ def _prepare_bundle(bundle_path: str, lpc_uid: str) -> str:
     return out_path
 
 
+def _patched_bundle(app: Appliance, bundle_path: str) -> str:
+    """Return a copy of the bundle patched with the appliance's lpc_uid.
+
+    The caller removes the returned file's directory.
+
+    Raises:
+        FileNotFoundError: If bundle_path does not exist.
+    """
+    if not os.path.exists(bundle_path):
+        raise FileNotFoundError(f"Token bundle not found: {bundle_path}")
+
+    app._logger.debug("Fetching lpc_uid from %s", app.hostname)
+    lpc_uid = _fetch_lpc_uid(app)
+    app._logger.debug("lpc_uid: %s", lpc_uid)
+
+    app._logger.debug("Patching bundle with lpc_uid")
+    return _prepare_bundle(bundle_path, lpc_uid)
+
+
 def enable_token_mode(app: Appliance, bundle_path: str) -> None:
     """Enable IPc (token) mode on an air-gapped appliance.
 
@@ -84,17 +110,8 @@ def enable_token_mode(app: Appliance, bundle_path: str) -> None:
         FileNotFoundError: If bundle_path does not exist.
         RuntimeError: If the console does not confirm IPc mode enabled.
     """
-    if not os.path.exists(bundle_path):
-        raise FileNotFoundError(f"Token bundle not found: {bundle_path}")
-
+    patched = _patched_bundle(app, bundle_path)
     transport = app.container._transport
-
-    app._logger.debug("Fetching lpc_uid from %s", app.hostname)
-    lpc_uid = _fetch_lpc_uid(app)
-    app._logger.debug("lpc_uid: %s", lpc_uid)
-
-    app._logger.debug("Patching bundle with lpc_uid")
-    patched = _prepare_bundle(bundle_path, lpc_uid)
 
     app._logger.debug("Uploading bundle to %s:%s", app.hostname, _REMOTE_BUNDLE_PATH)
     transport.upload_to_host(patched, _REMOTE_BUNDLE_PATH)
@@ -112,3 +129,82 @@ def enable_token_mode(app: Appliance, bundle_path: str) -> None:
             raise RuntimeError("Failed to enable IPc mode")
 
     app._logger.debug("IPc mode enabled")
+
+
+def _failed_phases(status: dict) -> str:
+    return "; ".join(
+        f"{p.get('phase')}: {p.get('message')}"
+        for p in status.get("phases", [])
+        if p.get("status") == "FAILED"
+    ) or "no failed phase reported"
+
+
+def enable_token_mode_wapi(
+    app: Appliance,
+    bundle_path: str,
+    timeout: int = TOKEN_BUNDLE_ENABLE_TIMEOUT,
+    poll_interval: int = TOKEN_BUNDLE_POLL_INTERVAL,
+) -> dict:
+    """Enable IPc (token) mode on an air-gapped appliance via ipc:bundle WAPI.
+
+    Fetches the grid's lpc_uid, patches the token bundle, uploads it with
+    fileop, then calls ipc:bundle upload, enable and polls status until
+    COMPLETED or FAILED. Requires app.wapi_version >= v2.15.
+
+    Args:
+        app: The appliance to enable token mode on.
+        bundle_path: Path to token_bundle.tar.
+        timeout: Seconds to wait for the migration to finish.
+        poll_interval: Seconds between status polls.
+
+    Returns:
+        {"upload": upload result, "status": final status, "bundle": GET ipc:bundle}.
+
+    Raises:
+        FileNotFoundError: If bundle_path does not exist.
+        RuntimeError: If upload/enable is rejected or a migration phase FAILED.
+        TimeoutError: If the migration does not finish within timeout.
+    """
+    log = app._logger
+    patched = _patched_bundle(app, bundle_path)
+    try:
+        log.info("Uploading bundle to %s via fileop", app.hostname)
+        token = app.wapi.upload_file(patched)
+    finally:
+        shutil.rmtree(os.path.dirname(patched))
+
+    try:
+        log.info("ipc:bundle upload")
+        uploaded = app.wapi.post("ipc:bundle?_function=upload", {"token": token})
+        log.info("Bundle accepted: %s", uploaded)
+        log.info("ipc:bundle enable")
+        status = app.wapi.post("ipc:bundle?_function=enable", {})
+    except WapiError as e:
+        raise RuntimeError(f"ipc:bundle on {app.hostname} rejected: {e}") from e
+
+    deadline = time.monotonic() + timeout
+    while status["overall_status"] not in ("COMPLETED", "FAILED"):
+        log.info(
+            "Migration %s: %s (%s%%)",
+            status["overall_status"], status["current_phase"], status["percentage"],
+        )
+        if time.monotonic() >= deadline:
+            raise TimeoutError(
+                f"IPc migration on {app.hostname} not finished after {timeout}s, "
+                f"last status: {status}"
+            )
+        time.sleep(poll_interval)
+        status = app.wapi.post("ipc:bundle?_function=status", {})
+
+    if status["overall_status"] == "FAILED":
+        raise RuntimeError(
+            f"IPc migration on {app.hostname} failed in phase "
+            f"{status['current_phase']}: {_failed_phases(status)}"
+        )
+
+    log.info("IPc migration completed")
+    return {
+        "upload": uploaded,
+        "status": status,
+        "bundle": app.wapi.get("ipc:bundle"),
+    }

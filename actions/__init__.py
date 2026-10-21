@@ -9,11 +9,14 @@ complete operation (enable token mode, join a member to a grid, etc.).
 from .appliance_reset_all import reset_all
 from .grid_join import join_grid
 from .grid_leave import leave_grid
-from .token_enable import enable_token_mode
+from .quick_deploy import quick_deploy
+from .token_enable import enable_token_mode, enable_token_mode_wapi
 
 __all__ = [
     "enable_token_mode",
+    "enable_token_mode_wapi",
     "join_grid",
     "leave_grid",
+    "quick_deploy",
     "reset_all",
 ]

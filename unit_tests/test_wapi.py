@@ -1,6 +1,7 @@
 """Unit tests for WapiClient: curl command construction and response parsing."""
 
 import json
+import re
 
 import pytest
 
@@ -147,3 +148,63 @@ class TestWapiClient:
         t = FakeTransport()
         client = WapiClient(transport=t, version="v2.12")
         assert repr(client) == "WapiClient(version='v2.12')"
+
+
+class TestUploadFile:
+
+    def _client(self, upload_status=200):
+        class T(FakeTransport):
+            def __init__(self):
+                super().__init__()
+                self.uploads = []
+
+            def upload(self, local, remote):
+                self.uploads.append((local, remote))
+
+            def run(self, cmd, check=True, quiet=False):
+                self.calls.append(cmd)
+                if "uploadinit" in cmd:
+                    body = {"token": "tok1", "url": "https://10.1.1.1/http_direct_file_io/req1/import_file"}
+                    return 0, _make_response(body), ""
+                return 0, f"\n{_STATUS_MARKER}{upload_status}", ""
+
+        t = T()
+        return t, WapiClient(transport=t)
+
+    def test_upload_file(self, tmp_path):
+        f = tmp_path / "bundle.tar"
+        f.write_bytes(b"x")
+        t, client = self._client()
+
+        assert client.upload_file(str(f)) == "tok1"
+
+        assert "-X POST" in t.calls[0] and "fileop?_function=uploadinit" in t.calls[0]
+        remote = t.uploads[0][1]
+        assert t.uploads == [(str(f), remote)]
+        assert re.fullmatch(r"/tmp/dominion_upload_[0-9a-f]{32}", remote)
+        cmd = t.calls[1]
+        assert f"-F 'import_file=@{remote};filename=bundle.tar'" in cmd
+        assert t.calls[2] == f"rm -f {remote}"
+        assert "https://localhost/http_direct_file_io/req1/import_file" in cmd
+        assert "10.1.1.1" not in cmd
+
+    def test_upload_failure_raises(self, tmp_path):
+        f = tmp_path / "bundle.tar"
+        f.write_bytes(b"x")
+        t, client = self._client(upload_status=500)
+        with pytest.raises(WapiError):
+            client.upload_file(str(f))
+        assert t.calls[-1].startswith("rm -f /tmp/dominion_upload_")
+
+    def test_upload_error_still_cleans_up(self, tmp_path):
+        f = tmp_path / "bundle.tar"
+        f.write_bytes(b"x")
+        t, client = self._client()
+
+        def boom(local, remote):
+            raise RuntimeError("upload failed")
+
+        t.upload = boom
+        with pytest.raises(RuntimeError):
+            client.upload_file(str(f))
+        assert t.calls[-1].startswith("rm -f /tmp/dominion_upload_")

@@ -1,0 +1,88 @@
+#!/usr/bin/env python3
+## assignments - appliance assignments and agent-instance registry (agents are named instances of a role)
+"""assignments assign <host> <agent> [--task T] [--force]   (agent must be registered)
+assignments release <host> [--agent A] [--force]
+assignments list [--agent A] [--json]                        (--json dumps agents + appliances)
+assignments agent add <name> [--role R] [--task T] [--status active|idle] [--session ID] [--force]
+                                                             (create or update; --role required on create, changing it needs --force; --task "" clears)
+assignments agent rm <name> [--force]                        (--force also releases its appliances)
+assignments agent list [--role R] [--json]"""
+
+import argparse
+import os
+import json
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.realpath(__file__)))))
+from dominion.src import assignments as A
+
+
+def main(argv=None):
+    p = argparse.ArgumentParser(prog="assignments")
+    sub = p.add_subparsers(dest="cmd", required=True)
+    a = sub.add_parser("assign")
+    a.add_argument("host")
+    a.add_argument("agent")
+    a.add_argument("--task")
+    a.add_argument("--force", action="store_true")
+    r = sub.add_parser("release")
+    r.add_argument("host")
+    r.add_argument("--agent")
+    r.add_argument("--force", action="store_true")
+    l = sub.add_parser("list")
+    l.add_argument("--agent")
+    l.add_argument("--json", action="store_true")
+    ag = sub.add_parser("agent").add_subparsers(dest="agent_cmd", required=True)
+    aa = ag.add_parser("add")
+    aa.add_argument("name")
+    aa.add_argument("--role")
+    aa.add_argument("--task")
+    aa.add_argument("--status", choices=A.STATUSES)
+    aa.add_argument("--session")
+    aa.add_argument("--force", action="store_true")
+    ar = ag.add_parser("rm")
+    ar.add_argument("name")
+    ar.add_argument("--force", action="store_true")
+    al = ag.add_parser("list")
+    al.add_argument("--role")
+    al.add_argument("--json", action="store_true")
+    args = p.parse_args(argv)
+
+    try:
+        if args.cmd == "assign":
+            A.assign(args.host, args.agent, args.task, args.force)
+        elif args.cmd == "release":
+            A.release(args.host, args.agent, args.force)
+        elif args.cmd == "agent":
+            if args.agent_cmd == "add":
+                A.register_agent(args.name, args.role, args.task, args.status, args.session, args.force)
+            elif args.agent_cmd == "rm":
+                A.unregister_agent(args.name, args.force)
+            else:
+                ags = A.agents(args.role)
+                if args.json:
+                    print(json.dumps(ags, indent=2))
+                else:
+                    for n, v in sorted(ags.items()):
+                        print(f"{n:<12} {v['role']:<12} {v.get('status') or '-':<8} {v.get('task') or '-':<14} "
+                              f"{v.get('session') or '-':<38} {v.get('updated_at') or '-'}")
+        else:
+            data = A.load()
+            apps = data["appliances"]
+            if args.agent:
+                agent = args.agent.lower()
+                apps = data["appliances"] = {h: v for h, v in apps.items() if v["agent"] == agent}
+            if args.json:
+                print(json.dumps(data, indent=2))
+            else:
+                for h, v in sorted(apps.items()):
+                    role = data["agents"].get(v["agent"], {}).get("role", "-")
+                    print(f"{h:<14} {v['agent']:<12} {role:<12} {v.get('task') or '-':<14} {v.get('assigned_at') or '-'}")
+    except A.AssignmentError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
