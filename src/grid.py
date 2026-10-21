@@ -25,12 +25,14 @@ class Grid:
         logger: NiosLogger,
         setup_dir: str | None = None,
         tag: str | None = None,
+        returncode: int = 0,
     ):
         self.gm = gm
         self.members = members
         self.topology = topology
         self.setup_dir = setup_dir
         self.tag = tag
+        self.returncode = returncode
         self._logger = logger
 
     @property
@@ -40,7 +42,13 @@ class Grid:
         return [self.gm, *self.members]
 
     @classmethod
-    def from_config(cls, config: GridConfig) -> "Grid":
+    def from_config(cls, config: GridConfig, check: bool = True) -> "Grid":
+        """Run grid_deploy and build the Grid from its tag file.
+
+        With check=False a non-zero grid_deploy exit is logged and the Grid is
+        still returned if the tag file parses; the exit code is kept in
+        Grid.returncode. The caller must verify the result itself.
+        """
         logger = config.logger or create_logger(
             name=f"dominion.grid-{config.member or config.gm or config.topology}",
             level=config.log_level,
@@ -61,13 +69,19 @@ class Grid:
             logger.debug(line.rstrip())
         proc.wait()
 
+        msg = f"grid_deploy exited {proc.returncode} for topology {config.topology!r}"
         if proc.returncode != 0:
-            raise RuntimeError(
-                f"grid_deploy exited {proc.returncode} for topology {config.topology!r}"
-            )
+            if check:
+                raise RuntimeError(msg)
+            logger.warning("%s; continuing, caller must verify", msg)
 
         tag_file = os.path.join(config.setup_dir, f"{config.tag}.xml")
-        tag_data = _parse_tag_file(tag_file)
+        try:
+            tag_data = _parse_tag_file(tag_file)
+        except (OSError, ET.ParseError) as e:
+            if proc.returncode == 0:
+                raise
+            raise RuntimeError(f"{msg}; tag file {tag_file} unusable: {e}") from e
         logger.info("Tag file parsed: %s", list(tag_data.keys()))
 
         gm_data = tag_data.get("master")
@@ -92,6 +106,7 @@ class Grid:
             logger=logger,
             setup_dir=config.setup_dir,
             tag=config.tag,
+            returncode=proc.returncode,
         )
 
     def __repr__(self) -> str:
