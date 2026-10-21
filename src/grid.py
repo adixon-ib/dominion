@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+from collections import deque
 import xml.etree.ElementTree as ET
 from typing import TYPE_CHECKING
 
@@ -12,6 +13,7 @@ from .log import create_logger
 if TYPE_CHECKING:
     from .log import NiosLogger
 
+_OUTPUT_TAIL_LINES = 20
 GRID_DEPLOY = os.path.join(os.path.dirname(os.path.dirname(__file__)), "tools", "grid_deploy")
 
 
@@ -26,6 +28,7 @@ class Grid:
         setup_dir: str | None = None,
         tag: str | None = None,
         returncode: int = 0,
+        gm_image: str = "",
     ):
         self.gm = gm
         self.members = members
@@ -33,6 +36,7 @@ class Grid:
         self.setup_dir = setup_dir
         self.tag = tag
         self.returncode = returncode
+        self.gm_image = gm_image
         self._logger = logger
 
     @property
@@ -42,12 +46,17 @@ class Grid:
         return [self.gm, *self.members]
 
     @classmethod
-    def from_config(cls, config: GridConfig, check: bool = True) -> "Grid":
+    def from_config(
+        cls, config: GridConfig, check: bool = True, verbose: bool = False,
+    ) -> "Grid":
         """Run grid_deploy and build the Grid from its tag file.
 
         With check=False a non-zero grid_deploy exit is logged and the Grid is
         still returned if the tag file parses; the exit code is kept in
         Grid.returncode. The caller must verify the result itself.
+
+        grid_deploy output is logged at debug, or at info with verbose=True.
+        Grid.gm_image is the image recorded for the master in the tag file.
         """
         logger = config.logger or create_logger(
             name=f"dominion.grid-{config.member or config.gm or config.topology}",
@@ -65,8 +74,11 @@ class Grid:
             text=True,
             bufsize=1,
         )
+        tail: deque[str] = deque(maxlen=_OUTPUT_TAIL_LINES)
+        log_line = logger.info if verbose else logger.debug
         for line in proc.stdout:
-            logger.debug(line.rstrip())
+            tail.append(line.rstrip())
+            log_line(line.rstrip())
         proc.wait()
 
         msg = f"grid_deploy exited {proc.returncode} for topology {config.topology!r}"
@@ -81,7 +93,10 @@ class Grid:
         except (OSError, ET.ParseError) as e:
             if proc.returncode == 0:
                 raise
-            raise RuntimeError(f"{msg}; tag file {tag_file} unusable: {e}") from e
+            raise RuntimeError(
+                f"{msg}; tag file {tag_file} unusable: {e}\n"
+                f"last grid_deploy output:\n" + "\n".join(tail)
+            ) from e
         logger.info("Tag file parsed: %s", list(tag_data.keys()))
 
         gm_data = tag_data.get("master")
@@ -107,6 +122,7 @@ class Grid:
             setup_dir=config.setup_dir,
             tag=config.tag,
             returncode=proc.returncode,
+            gm_image=gm_data["image"] if gm_data else "",
         )
 
     def __repr__(self) -> str:

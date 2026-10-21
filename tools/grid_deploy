@@ -28,7 +28,7 @@
 #   --member HOST      Member/physical host
 #   --ova FILENAME     OVA image filename (virtual)
 #   --bin FILENAME     BIN image filename (physical)
-#   --file FILENAME    Image filename (when all hosts are same type)
+#   --file IMAGE       Image full path or filename (when all hosts are same type)
 #   --max-retries N    Max IP allocation attempts for HA (default: 5)
 #   --skip-check       Skip HA IP conflict check (old behavior)
 #   --ipv4-only        Configure IPv4 only (passes -A 4 to config_grid)
@@ -44,7 +44,8 @@
 # All deployments wipe --setup-dir (default /tmp/my_setup) before running
 # config_grid. Pass distinct --setup-dir/--tag values to run multiple
 # grid_deploy invocations concurrently without colliding.
-# Filenames are looked up automatically — just pass the filename, not a path.
+# Images already on the install server are found by filename. For an image that is
+# not on the install server yet, pass the full path (config_grid uploads it).
 
 set -euo pipefail
 
@@ -755,7 +756,7 @@ case "$SUBCOMMAND" in
         echo "  --member HOST      Member host"
         echo "  --ova FILENAME     OVA image filename (virtual)"
         echo "  --bin FILENAME     BIN image filename (physical)"
-        echo "  --file FILENAME    Image filename (when all hosts are same type)"
+        echo "  --file IMAGE       Image full path or filename (when all hosts are same type)"
         echo "  --max-retries N    Max IP allocation retries for HA (default: 10)"
         echo "  --skip-check       Skip HA IP ping-check (use old behavior)"
         echo "  --ipv4-only        Configure IPv4 only (skip IPv6)"
