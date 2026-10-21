@@ -10,13 +10,9 @@ import re
 import subprocess
 import time
 
-from dominion.src.appliance import Appliance
+from dominion.src.appliance import Appliance, run_addkeys, wait_for_wapi
 from dominion.src.constants import (
-    ADDKEYS_TIMEOUT,
     NIOS_REBOOT_TIMEOUT,
-    NIOS_WAPI_POLL_INTERVAL,
-    NIOS_WAPI_READY_TIMEOUT,
-    WAPI_VERSION,
 )
 
 def _get_lab_network(hostname: str) -> tuple[str, str, str]:
@@ -71,40 +67,6 @@ def _console_set_network(console, ip: str, netmask: str, gateway: str) -> None:
     console.sendline("y")
     console.expect("Are you sure")
     console.sendline("y")
-
-
-def _wait_and_addkeys(ip: str, logger, timeout: int = NIOS_WAPI_READY_TIMEOUT) -> None:
-    """Wait for WAPI to come up via curl, then push SSH keys.
-
-    addkeys needs WAPI (port 443) to fetch grid info before pushing keys.
-    Polls from the lab host with no SSH dependency.
-    """
-    logger.info("Waiting for WAPI readiness (curl from lab host)")
-    url = f"https://{ip}/wapi/{WAPI_VERSION}/grid"
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        try:
-            result = subprocess.run(
-                ["curl", "-sk", "-o", "/dev/null", "-w", "%{http_code}",
-                 "-u", "admin:infoblox", url],
-                capture_output=True, text=True, timeout=10,
-            )
-            if result.stdout.strip() == "200":
-                logger.info("WAPI ready")
-                break
-        except (subprocess.TimeoutExpired, Exception):
-            pass
-        time.sleep(NIOS_WAPI_POLL_INTERVAL)
-    else:
-        raise RuntimeError(f"WAPI not ready on {ip} after {timeout}s")
-
-    logger.info("Running addkeys %s", ip)
-    try:
-        result = subprocess.run(["addkeys", ip], timeout=ADDKEYS_TIMEOUT)
-        if result.returncode != 0:
-            logger.warning("addkeys %s failed (exit %d)", ip, result.returncode)
-    except subprocess.TimeoutExpired:
-        logger.warning("addkeys %s timed out after %ds", ip, ADDKEYS_TIMEOUT)
 
 
 def _flush_ssh_rate_limit(app: Appliance) -> None:
@@ -176,7 +138,8 @@ def reset_all(app: Appliance) -> str:
 
     # Phase 5: wait for WAPI (curl from lab host, no SSH needed),
     # then push SSH keys once WAPI is up.
-    _wait_and_addkeys(ip, app._logger)
+    wait_for_wapi(ip, app._logger)
+    run_addkeys(ip, app._logger)
 
     # Phase 6: verify SSH works.
     app._logger.info("Verifying SSH connectivity")

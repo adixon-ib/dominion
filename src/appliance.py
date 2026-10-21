@@ -10,13 +10,15 @@ from typing import TYPE_CHECKING
 
 from .config import ApplianceConfig, LocalApplianceConfig
 from .constants import (
+    ADDKEYS_QUICK_WAPI_TIMEOUT,
     ADDKEYS_RETRY_INTERVAL,
     ADDKEYS_RETRY_TIMEOUT,
     ADDKEYS_TIMEOUT,
     NIOS_CONSOLE_USER,
     NIOS_CONSOLE_PASSWORD,
     NIOS_REBOOT_TIMEOUT,
-    NIOS_SSH_READY_DELAY,
+    NIOS_WAPI_POLL_INTERVAL,
+    NIOS_WAPI_READY_TIMEOUT,
     WAPI_VERSION,
 )
 from .container import NiosContainer, LocalNiosContainer
@@ -49,6 +51,51 @@ def ssh_port_open(host: str, timeout: int = 5) -> bool:
             return True
     except OSError:
         return False
+
+
+def wait_for_wapi(ip: str, logger, timeout: int = NIOS_WAPI_READY_TIMEOUT) -> None:
+    """Poll WAPI with curl from the lab host (no SSH connections) until it answers 200.
+
+    Raises RuntimeError on timeout.
+    """
+    logger.info("Waiting for WAPI readiness on %s (curl from lab host, up to %ds)", ip, timeout)
+    url = f"https://{ip}/wapi/{WAPI_VERSION}/grid"
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            result = subprocess.run(
+                ["curl", "-sk", "-o", "/dev/null", "-w", "%{http_code}",
+                 "-u", f"{NIOS_CONSOLE_USER}:{NIOS_CONSOLE_PASSWORD}", url],
+                capture_output=True, text=True, timeout=10,
+            )
+            if result.stdout.strip() == "200":
+                logger.info("WAPI ready on %s", ip)
+                return
+        except (subprocess.TimeoutExpired, OSError):
+            pass
+        time.sleep(NIOS_WAPI_POLL_INTERVAL)
+    raise RuntimeError(f"WAPI not ready on {ip} after {timeout}s")
+
+
+def run_addkeys(ip: str, logger) -> bool:
+    """Run `addkeys <ip>` once. Needs WAPI up. Returns True on exit 0."""
+    logger.info("Running addkeys %s", ip)
+    try:
+        rc = subprocess.run(["addkeys", ip], timeout=ADDKEYS_TIMEOUT).returncode
+    except subprocess.TimeoutExpired:
+        logger.warning("addkeys %s timed out after %ds", ip, ADDKEYS_TIMEOUT)
+        return False
+    except OSError as e:
+        logger.warning("addkeys %s could not run: %s", ip, e)
+        return False
+    if rc != 0:
+        logger.warning("addkeys %s failed (exit %d)", ip, rc)
+    return rc == 0
+
+
+def _first_line(e: Exception) -> str:
+    lines = str(e).splitlines()
+    return lines[0] if lines else type(e).__name__
 
 
 def reset_console(hostname: str) -> None:
@@ -150,9 +197,10 @@ class Appliance(_ApplianceBase):
         self._ip = ip
         self._console_user = console_user
         self._console_password = console_password
-        # SSH is a construction-time invariant. Probes SSH; if unavailable, enables
-        # it via console_connect (~15s delay + addkeys). Raises RuntimeError if SSH
-        # still cannot be reached after the attempt.
+        # SSH is a construction-time invariant. Probes SSH; if login fails, waits for
+        # WAPI and pushes keys with addkeys, power-cycling and enabling SSH via
+        # console_connect first if that is not enough. Raises RuntimeError naming the
+        # failed step if SSH still cannot be reached.
         self._ensure_ssh()
 
     @classmethod
@@ -289,24 +337,35 @@ class Appliance(_ApplianceBase):
                 "Enable SSH manually, or close any open console session and retry.",
                 self._hostname, e,
             )
-            return str(e) or type(e).__name__
+            return _first_line(e)
 
         self._logger.info("Console setup done on %s", ip)
         return None
 
-    def _addkeys(self, ip: str) -> bool:
-        self._logger.info("Running addkeys %s", ip)
+    def _restore_ssh(self, ip: str, wapi_timeout: int) -> str | None:
+        """Wait for WAPI, then retry addkeys + SSH check. Returns None on success, else the failed step."""
         try:
-            rc = subprocess.run(["addkeys", ip], timeout=ADDKEYS_TIMEOUT).returncode
-        except subprocess.TimeoutExpired:
-            self._logger.info("addkeys %s timed out after %ds", ip, ADDKEYS_TIMEOUT)
-            return False
-        except OSError as e:
-            self._logger.info("addkeys %s could not run: %s", ip, e)
-            return False
-        if rc != 0:
-            self._logger.info("addkeys %s failed (exit %d)", ip, rc)
-        return rc == 0
+            wait_for_wapi(ip, self._logger, timeout=wapi_timeout)
+        except RuntimeError as e:
+            return _first_line(e)
+
+        # Interval stays well above the 10 conns/60s/source-IP SSH rate limit.
+        deadline = time.time() + ADDKEYS_RETRY_TIMEOUT
+        attempts = 0
+        addkeys_ok = False
+        while True:
+            attempts += 1
+            addkeys_ok = run_addkeys(ip, self._logger)
+            if addkeys_ok and self._ssh_available():
+                self._logger.info("SSH available on %s after addkeys (attempt %d)", ip, attempts)
+                return None
+            if time.time() + ADDKEYS_RETRY_INTERVAL >= deadline:
+                break
+            time.sleep(ADDKEYS_RETRY_INTERVAL)
+
+        if addkeys_ok:
+            return f"SSH login still failing after addkeys succeeded ({attempts} attempts)"
+        return f"addkeys failed on all {attempts} attempts over {ADDKEYS_RETRY_TIMEOUT}s"
 
     def _ensure_ssh(self) -> None:
         ip = self._ip or self._hostname
@@ -317,38 +376,21 @@ class Appliance(_ApplianceBase):
         # Port open but login failed means keys are missing, not that SSH is off.
         if ssh_port_open(ip):
             self._logger.info("SSH port open but login failed on %s — trying addkeys before power-cycle", ip)
-            if self._addkeys(ip) and self._ssh_available():
-                self._logger.info("addkeys restored SSH on %s", ip)
+            failed = self._restore_ssh(ip, ADDKEYS_QUICK_WAPI_TIMEOUT)
+            if failed is None:
                 return
-            self._logger.info("addkeys alone did not restore SSH on %s — power-cycling", ip)
+            self._logger.info("addkeys alone did not restore SSH on %s (%s) — power-cycling", ip, failed)
 
+        steps = []
         console_error = self._enable_ssh_via_console()
-        if console_error is None:
-            self._logger.info("Waiting %ds for SSH to come up on %s", NIOS_SSH_READY_DELAY, ip)
-            time.sleep(NIOS_SSH_READY_DELAY)
-
-        # addkeys needs WAPI, which can lag behind the console login prompt, so retry.
-        deadline = time.time() + ADDKEYS_RETRY_TIMEOUT
-        attempts = 0
-        addkeys_ok = False
-        while True:
-            attempts += 1
-            addkeys_ok = self._addkeys(ip)
-            if addkeys_ok and self._ssh_available():
-                self._logger.info("SSH available on %s after addkeys (attempt %d)", ip, attempts)
-                return
-            if time.time() + ADDKEYS_RETRY_INTERVAL >= deadline:
-                break
-            time.sleep(ADDKEYS_RETRY_INTERVAL)
-
-        if addkeys_ok:
-            failed = f"SSH login still failing after addkeys succeeded ({attempts} attempts)"
-        else:
-            failed = f"addkeys failed on all {attempts} attempts over {ADDKEYS_RETRY_TIMEOUT}s"
         if console_error is not None:
-            failed = f"console enable failed ({console_error}); {failed}"
+            steps.append(f"console enable failed ({console_error})")
+        failed = self._restore_ssh(ip, NIOS_WAPI_READY_TIMEOUT)
+        if failed is None:
+            return
+        steps.append(failed)
         raise RuntimeError(
-            f"SSH unavailable on {ip}: {failed}. "
+            f"SSH unavailable on {ip}: {'; '.join(steps)}. "
             "Check that the appliance is reachable and no other process holds the console."
         )
 

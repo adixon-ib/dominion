@@ -13,15 +13,11 @@ from typing import TYPE_CHECKING
 
 import pexpect
 
-from dominion.src.appliance import reset_console
+from dominion.src.appliance import reset_console, run_addkeys, wait_for_wapi
 from dominion.src.constants import (
-    ADDKEYS_TIMEOUT,
     NIOS_CONSOLE_USER,
     NIOS_CONSOLE_PASSWORD,
     NIOS_REBOOT_TIMEOUT,
-    NIOS_WAPI_READY_TIMEOUT,
-    NIOS_WAPI_POLL_INTERVAL,
-    WAPI_VERSION,
 )
 from dominion.src.lab_info import get_lab_info
 from dominion.src.log import create_logger
@@ -102,27 +98,6 @@ def _wait_for_login(hostname: str, logger, timeout: int) -> ConsoleConnectSessio
     return session
 
 
-def _wait_for_wapi(ip: str, logger, timeout: int = NIOS_WAPI_READY_TIMEOUT) -> None:
-    """Poll WAPI from the dev machine until it responds."""
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        try:
-            result = subprocess.run(
-                [
-                    "curl", "-sk", "-f",
-                    "-u", f"{NIOS_CONSOLE_USER}:{NIOS_CONSOLE_PASSWORD}",
-                    f"https://{ip}/wapi/{WAPI_VERSION}/grid",
-                ],
-                capture_output=True, timeout=10,
-            )
-            if result.returncode == 0:
-                return
-        except subprocess.TimeoutExpired:
-            pass
-        time.sleep(NIOS_WAPI_POLL_INTERVAL)
-    raise RuntimeError(f"WAPI did not respond at {ip} within {timeout}s")
-
-
 def quick_deploy(
     hostname: str,
     image_file: str,
@@ -194,16 +169,12 @@ def quick_deploy(
     logger.info("remote_console enabled")
     session._close()
 
-    logger.info("Polling WAPI (up to %ds)...", NIOS_WAPI_READY_TIMEOUT)
-    _wait_for_wapi(ip, logger)
-    logger.info("WAPI ready")
+    wait_for_wapi(ip, logger)
 
-    logger.info("Running addkeys %s", ip)
-    try:
-        subprocess.run(["addkeys", ip], timeout=ADDKEYS_TIMEOUT, check=True)
+    if run_addkeys(ip, logger):
         logger.info("SSH keys pushed")
-    except (subprocess.TimeoutExpired, subprocess.CalledProcessError) as e:
-        logger.warning("addkeys failed: %s (SSH may not work)", e)
+    else:
+        logger.warning("SSH may not work: addkeys failed")
 
     logger.info("Quick deploy complete: %s (%s)", hostname, ip)
     return ip

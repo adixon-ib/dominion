@@ -192,6 +192,7 @@ def ensure(monkeypatch):
         ssh = []          # successive ssh_reachable results (last repeats)
         port_open = False
         addkeys = [True]  # successive addkeys results (last repeats)
+        wapi_error = None  # RuntimeError message from wait_for_wapi, or None for ready
         console_error = None
 
     def pop(seq):
@@ -209,8 +210,17 @@ def ensure(monkeypatch):
     monkeypatch.setattr(
         appliance_mod, "time", type("T", (), {"time": staticmethod(lambda: clock["t"]), "sleep": staticmethod(sleep)}),
     )
+    def wapi(ip, logger, timeout=None):
+        calls.append("wapi")
+        if Env.wapi_error:
+            raise RuntimeError(Env.wapi_error)
+
+    monkeypatch.setattr(appliance_mod, "wait_for_wapi", wapi)
+    monkeypatch.setattr(
+        appliance_mod, "run_addkeys",
+        lambda ip, logger: calls.append("addkeys") or pop(Env.addkeys),
+    )
     a = _bare_appliance()
-    monkeypatch.setattr(a, "_addkeys", lambda ip: calls.append("addkeys") or pop(Env.addkeys))
     monkeypatch.setattr(
         a, "_enable_ssh_via_console", lambda: calls.append("console") or Env.console_error,
     )
@@ -223,7 +233,7 @@ def test_ensure_ssh_addkeys_after_console_then_ssh_succeeds(ensure):
 
     ensure.a._ensure_ssh()
 
-    assert ensure.calls == ["ssh", "console", "addkeys", "ssh"]
+    assert ensure.calls == ["ssh", "console", "wapi", "addkeys", "ssh"]
 
 
 def test_ensure_ssh_retries_addkeys_until_it_succeeds(ensure):
@@ -241,17 +251,20 @@ def test_ensure_ssh_skips_power_cycle_when_addkeys_fixes_auth(ensure):
 
     ensure.a._ensure_ssh()
 
-    assert ensure.calls == ["ssh", "addkeys", "ssh"]
+    assert ensure.calls == ["ssh", "wapi", "addkeys", "ssh"]
 
 
 def test_ensure_ssh_falls_back_to_power_cycle_when_cheap_addkeys_fails(ensure):
     ensure.ssh = [False, True]
     ensure.port_open = True
-    ensure.addkeys = [False, True]
+    ensure.addkeys = [False] * 6 + [True]
 
     ensure.a._ensure_ssh()
 
-    assert ensure.calls == ["ssh", "addkeys", "console", "addkeys", "ssh"]
+    # Quick attempt exhausts its bounded retries, then power-cycle and a fresh gate + loop.
+    assert ensure.calls.index("console") > ensure.calls.index("addkeys")
+    assert ensure.calls[ensure.calls.index("console") + 1] == "wapi"
+    assert ensure.calls[-2:] == ["addkeys", "ssh"]
 
 
 def test_ensure_ssh_no_cheap_addkeys_when_port_closed(ensure):
@@ -259,7 +272,7 @@ def test_ensure_ssh_no_cheap_addkeys_when_port_closed(ensure):
 
     ensure.a._ensure_ssh()
 
-    assert ensure.calls[:2] == ["ssh", "console"]
+    assert ensure.calls[:3] == ["ssh", "console", "wapi"]
 
 
 def test_ensure_ssh_addkeys_failure_names_step(ensure):
@@ -270,6 +283,35 @@ def test_ensure_ssh_addkeys_failure_names_step(ensure):
         ensure.a._ensure_ssh()
 
     assert "ssh" not in ensure.calls[1:]  # never probes ssh after a failed addkeys
+
+
+def test_ensure_ssh_wapi_never_ready_skips_addkeys_and_names_step(ensure):
+    ensure.ssh = [False]
+    ensure.wapi_error = "WAPI not ready on 10.0.0.1 after 360s"
+
+    with pytest.raises(RuntimeError, match="WAPI not ready on 10.0.0.1 after 360s"):
+        ensure.a._ensure_ssh()
+
+    assert "addkeys" not in ensure.calls
+
+
+def test_ensure_ssh_port_open_wapi_down_falls_back_to_power_cycle(ensure, monkeypatch):
+    ensure.ssh = [False, True]
+    ensure.port_open = True
+    state = {"n": 0}
+    orig = appliance_mod.wait_for_wapi
+
+    def flaky(ip, logger, timeout=None):
+        state["n"] += 1
+        if state["n"] == 1:
+            ensure.calls.append("wapi")
+            raise RuntimeError("WAPI not ready")
+        return orig(ip, logger, timeout)
+
+    monkeypatch.setattr(appliance_mod, "wait_for_wapi", flaky)
+    ensure.a._ensure_ssh()
+
+    assert ensure.calls[:4] == ["ssh", "wapi", "console", "wapi"]
 
 
 def test_ensure_ssh_addkeys_ok_but_ssh_denied_names_step(ensure):
@@ -297,38 +339,67 @@ def test_ensure_ssh_retry_is_bounded(ensure):
     with pytest.raises(RuntimeError):
         ensure.a._ensure_ssh()
 
+    # Fake clock advances only by the retry sleep, so attempts == timeout / interval exactly.
     n = ensure.calls.count("addkeys")
     assert n == appliance_mod.ADDKEYS_RETRY_TIMEOUT // appliance_mod.ADDKEYS_RETRY_INTERVAL
+    assert appliance_mod.ADDKEYS_RETRY_INTERVAL >= 20  # SSH rate limit headroom
 
 
-# -- Appliance._addkeys() ------------------------------------------------------------
+# -- run_addkeys() / wait_for_wapi() -------------------------------------------------
 
 @pytest.mark.parametrize("rc,expected", [(0, True), (1, False)])
-def test_addkeys_returncode(monkeypatch, rc, expected):
+def test_run_addkeys_returncode(monkeypatch, rc, expected):
     seen = {}
     monkeypatch.setattr(
         appliance_mod.subprocess, "run",
         lambda cmd, **k: seen.setdefault("cmd", cmd) and type("R", (), {"returncode": rc})(),
     )
 
-    assert _bare_appliance()._addkeys("10.0.0.1") is expected
+    assert appliance_mod.run_addkeys("10.0.0.1", LOGGER) is expected
     assert seen["cmd"] == ["addkeys", "10.0.0.1"]
 
 
-def test_addkeys_false_on_timeout_and_missing_binary(monkeypatch):
+def test_run_addkeys_false_on_timeout_and_missing_binary(monkeypatch):
     import subprocess
 
     def timeout(*a, **k):
         raise subprocess.TimeoutExpired("addkeys", 1)
 
     monkeypatch.setattr(appliance_mod.subprocess, "run", timeout)
-    assert _bare_appliance()._addkeys("10.0.0.1") is False
+    assert appliance_mod.run_addkeys("10.0.0.1", LOGGER) is False
 
     def missing(*a, **k):
         raise FileNotFoundError("addkeys")
 
     monkeypatch.setattr(appliance_mod.subprocess, "run", missing)
-    assert _bare_appliance()._addkeys("10.0.0.1") is False
+    assert appliance_mod.run_addkeys("10.0.0.1", LOGGER) is False
+
+
+def test_wait_for_wapi_returns_on_200(monkeypatch):
+    codes = iter(["000", "503", "200"])
+    monkeypatch.setattr(appliance_mod.time, "sleep", lambda s: None)
+    monkeypatch.setattr(
+        appliance_mod.subprocess, "run",
+        lambda *a, **k: type("R", (), {"stdout": next(codes)})(),
+    )
+
+    appliance_mod.wait_for_wapi("10.0.0.1", LOGGER, timeout=60)
+
+
+def test_wait_for_wapi_raises_on_timeout(monkeypatch):
+    clock = {"t": 0.0}
+    monkeypatch.setattr(
+        appliance_mod, "time",
+        type("T", (), {"time": staticmethod(lambda: clock["t"]),
+                       "sleep": staticmethod(lambda s: clock.__setitem__("t", clock["t"] + s))}),
+    )
+    monkeypatch.setattr(
+        appliance_mod.subprocess, "run",
+        lambda *a, **k: type("R", (), {"stdout": "503"})(),
+    )
+
+    with pytest.raises(RuntimeError, match="WAPI not ready on 10.0.0.1 after 20s"):
+        appliance_mod.wait_for_wapi("10.0.0.1", LOGGER, timeout=20)
 
 
 # -- Appliance._enable_ssh_via_console() ---------------------------------------------

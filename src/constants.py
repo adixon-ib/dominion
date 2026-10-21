@@ -7,7 +7,8 @@ FRESH_INSTALL_SSH_TIMEOUT = 60  # seconds to wait for SSH after grid_deploy
 FRESH_INSTALL_SSH_INTERVAL = 5  # seconds between SSH probes
 ADDKEYS_TIMEOUT = 20          # seconds before giving up on addkeys
 ADDKEYS_RETRY_TIMEOUT = 180   # seconds to retry addkeys + SSH after enabling via console
-ADDKEYS_RETRY_INTERVAL = 10   # seconds between addkeys retries
+ADDKEYS_RETRY_INTERVAL = 30   # seconds between addkeys retries (SSH rate limit: 10 conns/60s)
+ADDKEYS_QUICK_WAPI_TIMEOUT = 60  # seconds to wait for WAPI before the cheap addkeys-only attempt
 
 # NIOS default credentials
 NIOS_CONSOLE_USER = "admin"
