@@ -6,6 +6,8 @@ NIOS_SSH_READY_DELAY = 30     # seconds after console setup before SSH is usable
 FRESH_INSTALL_SSH_TIMEOUT = 60  # seconds to wait for SSH after grid_deploy
 FRESH_INSTALL_SSH_INTERVAL = 5  # seconds between SSH probes
 ADDKEYS_TIMEOUT = 20          # seconds before giving up on addkeys
+ADDKEYS_RETRY_TIMEOUT = 180   # seconds to retry addkeys + SSH after enabling via console
+ADDKEYS_RETRY_INTERVAL = 10   # seconds between addkeys retries
 
 # NIOS default credentials
 NIOS_CONSOLE_USER = "admin"

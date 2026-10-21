@@ -182,24 +182,153 @@ def test_ensure_ssh_noop_when_already_reachable(monkeypatch):
     assert called["enable"] is False
 
 
-def test_ensure_ssh_enables_then_succeeds(monkeypatch):
-    a = _bare_appliance()
-    responses = iter([False, True])
+@pytest.fixture
+def ensure(monkeypatch):
+    """Harness for _ensure_ssh: scripted ssh/port/addkeys/console results, fake clock, call log."""
+    calls = []
+    clock = {"t": 0.0}
+
+    class Env:
+        ssh = []          # successive ssh_reachable results (last repeats)
+        port_open = False
+        addkeys = [True]  # successive addkeys results (last repeats)
+        console_error = None
+
+    def pop(seq):
+        return seq.pop(0) if len(seq) > 1 else seq[0]
+
+    def ssh(host, timeout=5):
+        calls.append("ssh")
+        return pop(Env.ssh)
+
+    def sleep(s):
+        clock["t"] += s
+
+    monkeypatch.setattr(appliance_mod, "ssh_reachable", ssh)
+    monkeypatch.setattr(appliance_mod, "ssh_port_open", lambda h, timeout=5: Env.port_open)
     monkeypatch.setattr(
-        appliance_mod, "ssh_reachable", lambda host, timeout=5: next(responses),
+        appliance_mod, "time", type("T", (), {"time": staticmethod(lambda: clock["t"]), "sleep": staticmethod(sleep)}),
     )
-    monkeypatch.setattr(a, "_enable_ssh_via_console", lambda: None)
-
-    a._ensure_ssh()  # must not raise
-
-
-def test_ensure_ssh_raises_when_still_unreachable(monkeypatch):
     a = _bare_appliance()
-    monkeypatch.setattr(appliance_mod, "ssh_reachable", lambda host, timeout=5: False)
-    monkeypatch.setattr(a, "_enable_ssh_via_console", lambda: None)
+    monkeypatch.setattr(a, "_addkeys", lambda ip: calls.append("addkeys") or pop(Env.addkeys))
+    monkeypatch.setattr(
+        a, "_enable_ssh_via_console", lambda: calls.append("console") or Env.console_error,
+    )
+    Env.a, Env.calls = a, calls
+    return Env
+
+
+def test_ensure_ssh_addkeys_after_console_then_ssh_succeeds(ensure):
+    ensure.ssh = [False, True]
+
+    ensure.a._ensure_ssh()
+
+    assert ensure.calls == ["ssh", "console", "addkeys", "ssh"]
+
+
+def test_ensure_ssh_retries_addkeys_until_it_succeeds(ensure):
+    ensure.ssh = [False, True]
+    ensure.addkeys = [False, False, True]
+
+    ensure.a._ensure_ssh()
+
+    assert ensure.calls.count("addkeys") == 3
+
+
+def test_ensure_ssh_skips_power_cycle_when_addkeys_fixes_auth(ensure):
+    ensure.ssh = [False, True]
+    ensure.port_open = True
+
+    ensure.a._ensure_ssh()
+
+    assert ensure.calls == ["ssh", "addkeys", "ssh"]
+
+
+def test_ensure_ssh_falls_back_to_power_cycle_when_cheap_addkeys_fails(ensure):
+    ensure.ssh = [False, True]
+    ensure.port_open = True
+    ensure.addkeys = [False, True]
+
+    ensure.a._ensure_ssh()
+
+    assert ensure.calls == ["ssh", "addkeys", "console", "addkeys", "ssh"]
+
+
+def test_ensure_ssh_no_cheap_addkeys_when_port_closed(ensure):
+    ensure.ssh = [False, True]
+
+    ensure.a._ensure_ssh()
+
+    assert ensure.calls[:2] == ["ssh", "console"]
+
+
+def test_ensure_ssh_addkeys_failure_names_step(ensure):
+    ensure.ssh = [False]
+    ensure.addkeys = [False]
+
+    with pytest.raises(RuntimeError, match=r"addkeys failed on all \d+ attempts"):
+        ensure.a._ensure_ssh()
+
+    assert "ssh" not in ensure.calls[1:]  # never probes ssh after a failed addkeys
+
+
+def test_ensure_ssh_addkeys_ok_but_ssh_denied_names_step(ensure):
+    ensure.ssh = [False]
+
+    with pytest.raises(RuntimeError, match="still failing after addkeys succeeded"):
+        ensure.a._ensure_ssh()
+
+
+def test_ensure_ssh_console_failure_still_tries_addkeys_and_names_both(ensure):
+    ensure.ssh = [False]
+    ensure.addkeys = [False]
+    ensure.console_error = "connection refused"
+
+    with pytest.raises(RuntimeError, match=r"console enable failed \(connection refused\); addkeys failed"):
+        ensure.a._ensure_ssh()
+
+    assert "addkeys" in ensure.calls
+
+
+def test_ensure_ssh_retry_is_bounded(ensure):
+    ensure.ssh = [False]
+    ensure.addkeys = [False]
 
     with pytest.raises(RuntimeError):
-        a._ensure_ssh()
+        ensure.a._ensure_ssh()
+
+    n = ensure.calls.count("addkeys")
+    assert n == appliance_mod.ADDKEYS_RETRY_TIMEOUT // appliance_mod.ADDKEYS_RETRY_INTERVAL
+
+
+# -- Appliance._addkeys() ------------------------------------------------------------
+
+@pytest.mark.parametrize("rc,expected", [(0, True), (1, False)])
+def test_addkeys_returncode(monkeypatch, rc, expected):
+    seen = {}
+    monkeypatch.setattr(
+        appliance_mod.subprocess, "run",
+        lambda cmd, **k: seen.setdefault("cmd", cmd) and type("R", (), {"returncode": rc})(),
+    )
+
+    assert _bare_appliance()._addkeys("10.0.0.1") is expected
+    assert seen["cmd"] == ["addkeys", "10.0.0.1"]
+
+
+def test_addkeys_false_on_timeout_and_missing_binary(monkeypatch):
+    import subprocess
+
+    def timeout(*a, **k):
+        raise subprocess.TimeoutExpired("addkeys", 1)
+
+    monkeypatch.setattr(appliance_mod.subprocess, "run", timeout)
+    assert _bare_appliance()._addkeys("10.0.0.1") is False
+
+    def missing(*a, **k):
+        raise FileNotFoundError("addkeys")
+
+    monkeypatch.setattr(appliance_mod.subprocess, "run", missing)
+    assert _bare_appliance()._addkeys("10.0.0.1") is False
 
 
 # -- Appliance._enable_ssh_via_console() ---------------------------------------------
@@ -297,7 +426,7 @@ def test_enable_ssh_when_support_access_off(monkeypatch):
         FakeConsole(show_support_access_output="Current support access status: off"))
 
     a = _bare_appliance()
-    a._enable_ssh_via_console()
+    assert a._enable_ssh_via_console() is None
 
     assert "set remote_console" in console.sent
     assert "set support_access" in console.sent
@@ -338,7 +467,7 @@ def test_enable_ssh_via_console_returns_gracefully_on_connect_failure(monkeypatc
         lambda *a, **k: (_ for _ in ()).throw(Exception("connection refused")),
     )
 
-    a._enable_ssh_via_console()  # must not raise
+    assert a._enable_ssh_via_console() == "connection refused"
 
 
 # -- wapi / wapi_version (on _ApplianceBase) ----------------------------------------

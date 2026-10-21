@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import socket
 import subprocess
 import time
 from contextlib import contextmanager
@@ -9,6 +10,8 @@ from typing import TYPE_CHECKING
 
 from .config import ApplianceConfig, LocalApplianceConfig
 from .constants import (
+    ADDKEYS_RETRY_INTERVAL,
+    ADDKEYS_RETRY_TIMEOUT,
     ADDKEYS_TIMEOUT,
     NIOS_CONSOLE_USER,
     NIOS_CONSOLE_PASSWORD,
@@ -37,6 +40,14 @@ def ssh_reachable(host: str, timeout: int = 5) -> bool:
         )
         return result.returncode == 0
     except Exception:
+        return False
+
+
+def ssh_port_open(host: str, timeout: int = 5) -> bool:
+    try:
+        with socket.create_connection((host, 22), timeout=timeout):
+            return True
+    except OSError:
         return False
 
 
@@ -222,7 +233,8 @@ class Appliance(_ApplianceBase):
             time.sleep(0.1)
             console.sendline("y")
 
-    def _enable_ssh_via_console(self) -> None:
+    def _enable_ssh_via_console(self) -> str | None:
+        """Power-cycle and enable remote_console + support_access. Returns an error string on failure."""
         ip = self._ip or self._hostname
         self._logger.info("SSH unavailable on %s — power-cycling and enabling via console", ip)
 
@@ -277,37 +289,68 @@ class Appliance(_ApplianceBase):
                 "Enable SSH manually, or close any open console session and retry.",
                 self._hostname, e,
             )
-            return
+            return str(e) or type(e).__name__
 
-        self._logger.info("Console setup done — waiting %ds for SSH to come up", NIOS_SSH_READY_DELAY)
-        time.sleep(NIOS_SSH_READY_DELAY)
+        self._logger.info("Console setup done on %s", ip)
+        return None
 
+    def _addkeys(self, ip: str) -> bool:
         self._logger.info("Running addkeys %s", ip)
         try:
-            result = subprocess.run(["addkeys", ip], timeout=ADDKEYS_TIMEOUT)
-            if result.returncode != 0:
-                self._logger.info(
-                    "addkeys %s failed (exit %d) — SSH is enabled but key push failed. "
-                    "You may not be able to SSH in.",
-                    ip, result.returncode,
-                )
+            rc = subprocess.run(["addkeys", ip], timeout=ADDKEYS_TIMEOUT).returncode
         except subprocess.TimeoutExpired:
-            self._logger.info(
-                "addkeys %s timed out after %ds — SSH is enabled but key push failed. "
-                "You may not be able to SSH in.",
-                ip, ADDKEYS_TIMEOUT,
-            )
+            self._logger.info("addkeys %s timed out after %ds", ip, ADDKEYS_TIMEOUT)
+            return False
+        except OSError as e:
+            self._logger.info("addkeys %s could not run: %s", ip, e)
+            return False
+        if rc != 0:
+            self._logger.info("addkeys %s failed (exit %d)", ip, rc)
+        return rc == 0
 
     def _ensure_ssh(self) -> None:
+        ip = self._ip or self._hostname
         if self._ssh_available():
-            self._logger.debug("SSH already reachable on %s", self._ip or self._hostname)
+            self._logger.debug("SSH already reachable on %s", ip)
             return
-        self._enable_ssh_via_console()
-        if not self._ssh_available():
-            raise RuntimeError(
-                f"SSH unavailable on {self._ip or self._hostname} after attempting to enable it. "
-                "Check that the appliance is reachable and no other process holds the console."
-            )
+
+        # Port open but login failed means keys are missing, not that SSH is off.
+        if ssh_port_open(ip):
+            self._logger.info("SSH port open but login failed on %s — trying addkeys before power-cycle", ip)
+            if self._addkeys(ip) and self._ssh_available():
+                self._logger.info("addkeys restored SSH on %s", ip)
+                return
+            self._logger.info("addkeys alone did not restore SSH on %s — power-cycling", ip)
+
+        console_error = self._enable_ssh_via_console()
+        if console_error is None:
+            self._logger.info("Waiting %ds for SSH to come up on %s", NIOS_SSH_READY_DELAY, ip)
+            time.sleep(NIOS_SSH_READY_DELAY)
+
+        # addkeys needs WAPI, which can lag behind the console login prompt, so retry.
+        deadline = time.time() + ADDKEYS_RETRY_TIMEOUT
+        attempts = 0
+        addkeys_ok = False
+        while True:
+            attempts += 1
+            addkeys_ok = self._addkeys(ip)
+            if addkeys_ok and self._ssh_available():
+                self._logger.info("SSH available on %s after addkeys (attempt %d)", ip, attempts)
+                return
+            if time.time() + ADDKEYS_RETRY_INTERVAL >= deadline:
+                break
+            time.sleep(ADDKEYS_RETRY_INTERVAL)
+
+        if addkeys_ok:
+            failed = f"SSH login still failing after addkeys succeeded ({attempts} attempts)"
+        else:
+            failed = f"addkeys failed on all {attempts} attempts over {ADDKEYS_RETRY_TIMEOUT}s"
+        if console_error is not None:
+            failed = f"console enable failed ({console_error}); {failed}"
+        raise RuntimeError(
+            f"SSH unavailable on {ip}: {failed}. "
+            "Check that the appliance is reachable and no other process holds the console."
+        )
 
     def __repr__(self) -> str:
         return f"Appliance({self._hostname!r}, container={self.container.container_name!r})"
