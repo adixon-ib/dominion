@@ -76,7 +76,12 @@ class WapiClient:
         body = body.strip()
         status = int(status_str.strip()) if status_str.strip().isdigit() else 0
 
-        parsed = json.loads(body) if body else None
+        try:
+            parsed = json.loads(body) if body else None
+        except json.JSONDecodeError:
+            if 200 <= status < 300:
+                raise
+            parsed, body = None, body[:200]
 
         if check and (status < 200 or status >= 300):
             raise WapiError(method, path, status, body)

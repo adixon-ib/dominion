@@ -94,6 +94,30 @@ class TestWapiClient:
         assert exc_info.value.status == 404
         assert exc_info.value.method == "GET"
 
+    def test_non_json_error_body_raises_wapi_error_with_excerpt(self):
+        html = "<html>" + "x" * 500 + "</html>"
+        t = FakeTransport(stdout=f"{html}\n{_STATUS_MARKER}502")
+        client = WapiClient(transport=t)
+
+        with pytest.raises(WapiError) as exc_info:
+            client.get("grid")
+        assert exc_info.value.status == 502
+        assert exc_info.value.body.startswith("<html>")
+        assert len(exc_info.value.body) == 200
+
+    def test_non_json_error_body_check_false_returns_none(self):
+        t = FakeTransport(stdout=f"<html>bad gateway</html>\n{_STATUS_MARKER}502")
+        client = WapiClient(transport=t)
+
+        assert client.request("GET", "grid", check=False) == (502, None)
+
+    def test_non_json_success_body_still_raises_decode_error(self):
+        t = FakeTransport(stdout=f"not json\n{_STATUS_MARKER}200")
+        client = WapiClient(transport=t)
+
+        with pytest.raises(json.JSONDecodeError):
+            client.get("grid")
+
     def test_raises_wapi_error_on_error_payload(self):
         t = FakeTransport(stdout=_make_response({"Error": "AdmConDataError", "text": "bad"}, status=200))
         client = WapiClient(transport=t)

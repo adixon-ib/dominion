@@ -50,6 +50,14 @@ def _prepare_bundle(bundle_path: str, lpc_uid: str) -> str:
         Path to the repacked tar (in a temp directory, caller should clean up).
     """
     work_dir = tempfile.mkdtemp()
+    try:
+        return _repack_bundle(bundle_path, lpc_uid, work_dir)
+    except BaseException:
+        shutil.rmtree(work_dir, ignore_errors=True)
+        raise
+
+
+def _repack_bundle(bundle_path: str, lpc_uid: str, work_dir: str) -> str:
     with tarfile.open(bundle_path) as tar:
         tar.extractall(work_dir)
 
@@ -155,7 +163,8 @@ def enable_token_mode_wapi(
     Fetches the grid's lpc_uid, patches the token bundle, uploads it with
     fileop, then calls ipc:bundle upload, enable and polls status until
     COMPLETED or FAILED. Raises app.wapi_version to v2.15 if it is lower.
-    Transient WapiErrors on the status poll are retried until the deadline.
+    Transient WapiErrors (status 0 or >= 500) on the status poll are retried
+    until the deadline; other WapiErrors propagate.
 
     Args:
         app: The appliance to enable token mode on.
@@ -205,6 +214,8 @@ def enable_token_mode_wapi(
         try:
             status = app.wapi.post("ipc:bundle?_function=status", {})
         except WapiError as e:
+            if e.status != 0 and e.status < 500:
+                raise
             log.warning("Status poll on %s failed, retrying: %s", app.hostname, e)
 
     if status["overall_status"] == "FAILED":
