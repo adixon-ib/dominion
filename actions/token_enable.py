@@ -22,6 +22,11 @@ if TYPE_CHECKING:
 _REQUIRED_MEMBERS = ("tab.json", "docker-compose.yml", "usage_calculator")
 _REMOTE_BUNDLE_PATH = "/storage/tmp/token_bundle.tar"
 _AIRGAPPED_FLAG = "/infoblox/var/flags/airgapped_skip"
+_BUNDLE_WAPI_VERSION = "v2.15"
+
+
+def _version_tuple(version: str) -> tuple[int, ...]:
+    return tuple(int(n) for n in version.lstrip("v").split("."))
 
 
 def _fetch_lpc_uid(app: Appliance) -> str:
@@ -149,7 +154,8 @@ def enable_token_mode_wapi(
 
     Fetches the grid's lpc_uid, patches the token bundle, uploads it with
     fileop, then calls ipc:bundle upload, enable and polls status until
-    COMPLETED or FAILED. Requires app.wapi_version >= v2.15.
+    COMPLETED or FAILED. Raises app.wapi_version to v2.15 if it is lower.
+    Transient WapiErrors on the status poll are retried until the deadline.
 
     Args:
         app: The appliance to enable token mode on.
@@ -166,6 +172,8 @@ def enable_token_mode_wapi(
         TimeoutError: If the migration does not finish within timeout.
     """
     log = app._logger
+    if _version_tuple(app.wapi_version) < _version_tuple(_BUNDLE_WAPI_VERSION):
+        app.wapi_version = _BUNDLE_WAPI_VERSION
     patched = _patched_bundle(app, bundle_path)
     try:
         log.info("Uploading bundle to %s via fileop", app.hostname)
@@ -194,7 +202,10 @@ def enable_token_mode_wapi(
                 f"last status: {status}"
             )
         time.sleep(poll_interval)
-        status = app.wapi.post("ipc:bundle?_function=status", {})
+        try:
+            status = app.wapi.post("ipc:bundle?_function=status", {})
+        except WapiError as e:
+            log.warning("Status poll on %s failed, retrying: %s", app.hostname, e)
 
     if status["overall_status"] == "FAILED":
         raise RuntimeError(
