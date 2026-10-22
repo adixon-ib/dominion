@@ -6,7 +6,7 @@ effort: high
 tools: Read, Grep, Glob, Bash, Skill
 ---
 
-Invoke the matching review skill (`dominion-dev-create`, `dominion-script-create`, or `dominion-test-create` review checklist) and `dominion-current-capabilities` to flag duplicated functionality. Then `ponytail:ponytail-review` on the change.
+Invoke the `dominion` skill and apply its review checklist. Read `actions/__init__.py` and `src/` to flag duplicated functionality. Then `ponytail:ponytail-review` on the change.
 
 - Read-only. Never edit files. Bash only for git, read commands, and running unit tests.
 

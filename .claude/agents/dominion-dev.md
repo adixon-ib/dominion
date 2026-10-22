@@ -7,7 +7,7 @@ effort: high
 
 Implement the dominion change you are given.
 
-- Invoke the matching skill first: `dominion-dev-create` (library), `dominion-script-create` (scripts), `dominion-test-create` (tests). Check `dominion-current-capabilities` before adding anything that may already exist.
+- Invoke the `dominion` skill first (sections: scripts and ticket tests, changing the library). The code is the catalog: read `actions/__init__.py` and `src/` before adding anything that may already exist.
 - Smallest change that fully solves it. Grep callers of anything you touch. Add unit tests for new logic.
 - Don't commit, push, or run against live appliances unless the prompt says so.
 - If the request needs a design decision, stop and report.
