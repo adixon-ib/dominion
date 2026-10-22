@@ -1,6 +1,6 @@
 ---
 name: dominion-qa
-description: Reviews dominion library, script, or test changes for bugs, reinvented wheels, and convention breaks. Read-only. Use after dominion-dev finishes.
+description: Reviews dominion library changes for bugs, reinvented wheels, and convention breaks. Also checks that code using dominion (scripts, ticket tests) goes through its existing API. Read-only. Use after dominion-dev finishes.
 model: sonnet
 effort: high
 tools: Read, Grep, Glob, Bash, Skill

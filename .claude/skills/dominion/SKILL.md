@@ -1,7 +1,7 @@
 ---
 name: dominion
-description: "Gotchas and guidelines for using and changing the dominion library (/blox/adixon1/scripts/dominion): running commands against NIOS appliances and NCC containers, writing scripts and ticket tests, and the review checklist for library changes."
-when_to_use: "use dominion, write a ticket test, write an appliance script, deploy to appliance or NCC, add a dominion action or deploy method, review a dominion change"
+description: "Gotchas and guidelines for using and changing the dominion library (/blox/adixon1/scripts/dominion): running commands against NIOS appliances and NCC containers, scripts and tests that use it, and the review checklist for library changes."
+when_to_use: "use dominion, write an appliance script, use the Run harness, deploy to appliance or NCC, add a dominion action or deploy method, review a dominion change"
 ---
 
 # dominion
@@ -22,24 +22,11 @@ The code is the catalog. Before writing a helper, read `actions/__init__.py` (ac
 - Log levels (`log_level` in the config): `off`, `info` (default), `debug` (full commands, exit codes), `verbose` (pexpect internals).
 - If unsure which entry point or target to use, ask.
 
-## Scripts and ticket tests
+## Scripts and tests
 
 Reusable scripts (`/blox/adixon1/scripts/appliance/`): CLI args or env vars for inputs, validated before building dominion objects. Exit 0 on success, non-zero on failure, messages with hostname, operation and the actual error. No `Run` harness. Reuse an action before writing logic.
 
-Ticket tests (`/blox/adixon1/scripts/tickets/<TICKET>/`), split by role once past a few steps:
-
-- `test_<ticket>.py`: thin main. Builds objects, `run = Run()` first, `run.add(target)` for every target, `output_dir=run.output_dir` in every config, `try/finally: run.summary()`.
-- `impl.py`: the phase functions. Each returns True or raises. Cleanup phases log instead of failing.
-- `common.py`: constants and config (hosts, worktree, bundle path, expected strings). Config lives here, not in env vars.
-
-Phases:
-
-- Numbered narrative names in execution order (`"3. preflight"`), zero-arg lambdas: `run.test("4. enable via CLI", lambda: enable_cli(lab))`.
-- A phase whose prerequisite failed gets `run.skip(name, reason)`, not a run.
-- Env vars are only toggles. Gate optional phases with `SKIP_X=1` (`SKIP_DEPLOY`, `SKIP_RESET`) and `run.skip("name", "SKIP_X set")`. Validate gate values are 0 or 1.
-- Assertions show actual values: `assert x == y, f"expected {y!r}, got {x!r}"`. Collect several failures per phase when it helps.
-- Document the exact run command (including any `PYTHONPATH`) in the main file docstring.
-- Console expect patterns come from real NIOS output, not guesses. Timeouts are explicit (boot 300s, httpd 45s).
+Run harness (`src/harness.py`), for tests that use dominion: `run = Run()` first, `run.add(target)` for every target, `output_dir=run.output_dir` in every config, `try/finally: run.summary()`. A phase whose prerequisite failed gets `run.skip(name, reason)`. Console expect patterns come from real NIOS output, not guesses. Timeouts are explicit (boot 300s, httpd 45s).
 
 ## Changing the library
 
@@ -58,4 +45,4 @@ Review checklist (dominion-qa):
 - Conventions (high): `from_config()`, `console_connect_session()` for reboots, no raw curl, ssh, scp or pexpect, logger not `print`.
 - Backwards compatibility (medium): new params have defaults, no renamed public names without aliases, all callers grepped (scripts and ticket tests too).
 - Testing (medium): new logic has a unit test, edge cases covered (timeout, container not running, stale session, non-JSON response).
-- Scripts and tests (medium): hardcoded values that belong in `common.py` or args, `sys.path` hacks, missing `try/finally: run.summary()`, guessed expect patterns.
+- Scripts and tests (medium): hardcoded values that belong in constants or args, `sys.path` hacks, missing `try/finally: run.summary()`, guessed expect patterns.

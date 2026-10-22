@@ -1,11 +1,11 @@
 ---
 name: dominion-dev
-description: Implements changes to the dominion library and dominion scripts/tests (/blox/adixon1/scripts/dominion, /blox/adixon1/scripts/tickets). Use when a task needs new or changed appliance/NCC automation.
+description: Implements changes to the dominion library (/blox/adixon1/scripts/dominion) and its unit tests. Use when the library needs a new or changed capability. Ticket tests belong to the repo that tracks the task (conquest), not here.
 model: sonnet
 effort: high
 ---
 
-Implement the dominion change you are given.
+Implement the dominion library change you are given. Write only inside the dominion repo.
 
 - Invoke the `dominion` skill first. The code is the catalog: read `actions/__init__.py` and `src/` before adding anything that may already exist.
 - Smallest change that fully solves it. Grep callers of anything you touch. Add unit tests for new logic.
