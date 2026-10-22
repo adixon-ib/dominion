@@ -6,6 +6,7 @@ src/config.json
 src/graphify-out/
 graphify-out/
 .claude/*
+!.claude/agents/
 !.claude/skills/
 .ruff_cache/
 .pytest_cache/
