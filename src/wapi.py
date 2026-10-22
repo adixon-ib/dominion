@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 import json
+import os
+import shlex
 import time
+import uuid
+from urllib.parse import urlsplit, urlunsplit
 from typing import TYPE_CHECKING, Any
 
 from .constants import NIOS_CONSOLE_PASSWORD, NIOS_CONSOLE_USER, WAPI_VERSION
@@ -72,7 +76,12 @@ class WapiClient:
         body = body.strip()
         status = int(status_str.strip()) if status_str.strip().isdigit() else 0
 
-        parsed = json.loads(body) if body else None
+        try:
+            parsed = json.loads(body) if body else None
+        except json.JSONDecodeError:
+            if 200 <= status < 300:
+                raise
+            parsed, body = None, body[:200]
 
         if check and (status < 200 or status >= 300):
             raise WapiError(method, path, status, body)
@@ -106,6 +115,37 @@ class WapiClient:
         check: bool = True,
     ) -> tuple[int, Any]:
         return self._request(method, path, data=data, params=params, check=check)
+
+    def upload_file(self, local_path: str) -> str:
+        """Upload a local file via fileop uploadinit and return its token.
+
+        The file is copied into the container, then curl'd multipart to the
+        init URL (host rewritten to localhost, matching _base_url).
+
+        Raises:
+            WapiError: If uploadinit or the upload POST fails.
+        """
+        init = self.post("fileop?_function=uploadinit")
+        token, url = init["token"], init["url"]
+        parts = urlsplit(url)
+        url = urlunsplit(parts._replace(netloc="localhost"))
+
+        name = os.path.basename(local_path)
+        remote = f"/tmp/dominion_upload_{uuid.uuid4().hex}"
+        try:
+            self._transport.upload(local_path, remote)
+            cmd = (
+                f'curl -sk -w "{_WRITE_OUT}" -u {self._user}:{self._password}'
+                f" -F {shlex.quote(f'import_file=@{remote};filename={name}')} {shlex.quote(url)}"
+            )
+            _, out, _ = self._transport.run(cmd, check=False)
+        finally:
+            self._transport.run(f"rm -f {shlex.quote(remote)}", check=False)
+        body, _, status_str = out.rpartition(_STATUS_MARKER)
+        status = int(status_str.strip()) if status_str.strip().isdigit() else 0
+        if status < 200 or status >= 300:
+            raise WapiError("POST", urlsplit(url).path, status, body.strip())
+        return token
 
     def wait_until_ready(self, timeout: int = 300, interval: int = 10) -> None:
         """Poll WAPI until it responds to a grid request.
