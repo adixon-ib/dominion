@@ -40,6 +40,7 @@ PYABS_FILES = [
     "grid_token_pool.py",
     "member_token.py",
     "token_audit_log.py",
+    "token_bundle.py",
     "token_common.py",
     "token_gridwide.py",
     "token_overage.py",
@@ -49,7 +50,9 @@ PYABS_FILES = [
 WAPI_FILES = [
     "grid_token_pool.py",
     "member_token.py",
+    "onewapiobjs.py",
     "token_audit_log.py",
+    "token_bundle.py",
     "token_common.py",
     "token_gridwide.py",
     "token_overage.py",
