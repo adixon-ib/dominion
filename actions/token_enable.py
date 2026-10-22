@@ -11,8 +11,8 @@ import time
 from typing import TYPE_CHECKING
 
 from dominion.src.constants import (
+    NIOS_WAPI_POLL_INTERVAL,
     TOKEN_BUNDLE_ENABLE_TIMEOUT,
-    TOKEN_BUNDLE_POLL_INTERVAL,
 )
 from dominion.src.wapi import WapiError
 
@@ -50,14 +50,6 @@ def _prepare_bundle(bundle_path: str, lpc_uid: str) -> str:
         Path to the repacked tar (in a temp directory, caller should clean up).
     """
     work_dir = tempfile.mkdtemp()
-    try:
-        return _repack_bundle(bundle_path, lpc_uid, work_dir)
-    except BaseException:
-        shutil.rmtree(work_dir, ignore_errors=True)
-        raise
-
-
-def _repack_bundle(bundle_path: str, lpc_uid: str, work_dir: str) -> str:
     with tarfile.open(bundle_path) as tar:
         tar.extractall(work_dir)
 
@@ -156,7 +148,6 @@ def enable_token_mode_wapi(
     app: Appliance,
     bundle_path: str,
     timeout: int = TOKEN_BUNDLE_ENABLE_TIMEOUT,
-    poll_interval: int = TOKEN_BUNDLE_POLL_INTERVAL,
 ) -> dict:
     """Enable IPc (token) mode on an air-gapped appliance via ipc:bundle WAPI.
 
@@ -170,7 +161,6 @@ def enable_token_mode_wapi(
         app: The appliance to enable token mode on.
         bundle_path: Path to token_bundle.tar.
         timeout: Seconds to wait for the migration to finish.
-        poll_interval: Seconds between status polls.
 
     Returns:
         {"upload": upload result, "status": final status, "bundle": GET ipc:bundle}.
@@ -210,7 +200,7 @@ def enable_token_mode_wapi(
                 f"IPc migration on {app.hostname} not finished after {timeout}s, "
                 f"last status: {status}"
             )
-        time.sleep(poll_interval)
+        time.sleep(NIOS_WAPI_POLL_INTERVAL)
         try:
             status = app.wapi.post("ipc:bundle?_function=status", {})
         except WapiError as e:

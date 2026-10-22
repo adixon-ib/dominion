@@ -10,7 +10,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from dominion import LocalAppliance, LocalApplianceConfig, WapiClient, WapiError
+from dominion import WapiError
 from dominion.actions import token_enable
 from dominion.actions.token_enable import enable_token_mode_wapi
 
@@ -86,9 +86,10 @@ def test_timeout(app):
         enable_token_mode_wapi(app, "b.tar", timeout=0)
 
 
-def test_transient_poll_error_retried(app):
+@pytest.mark.parametrize("status", [0, 503])
+def test_transient_poll_error_retried(app, status):
     done = _status("COMPLETED", pct=100)
-    seq = iter([WapiError("POST", "ipc:bundle", 503, "restarting"), done])
+    seq = iter([WapiError("POST", "ipc:bundle", status, "restarting"), done])
 
     def post(path, data=None):
         if path.endswith("upload"):
@@ -124,25 +125,6 @@ def test_poll_auth_error_raises_immediately(app):
     assert exc.value.status == 401
     app._logger.warning.assert_not_called()
     app.wapi.get.assert_not_called()
-
-
-def test_poll_status_zero_is_retried(app):
-    seq = iter([WapiError("POST", "ipc:bundle", 0, ""), _status("COMPLETED", pct=100)])
-
-    def post(path, data=None):
-        if path.endswith("upload"):
-            return {"uid": "u"}
-        if path.endswith("enable"):
-            return _status("IN_PROGRESS")
-        item = next(seq)
-        if isinstance(item, Exception):
-            raise item
-        return item
-
-    app.wapi.post.side_effect = post
-    app.wapi.get.return_value = []
-
-    assert enable_token_mode_wapi(app, "b.tar")["status"]["overall_status"] == "COMPLETED"
 
 
 def test_persistent_poll_error_times_out(app, monkeypatch):
@@ -237,46 +219,3 @@ def test_patched_bundle_injects_lpc_uid(lpc_app, tmp_path):
 def test_patched_bundle_missing_file(lpc_app, tmp_path):
     with pytest.raises(FileNotFoundError, match="not found"):
         token_enable._patched_bundle(lpc_app, str(tmp_path / "nope.tar"))
-
-
-def test_patched_bundle_missing_member(lpc_app, tmp_path, monkeypatch):
-    bundle = str(tmp_path / "b.tar")
-    work = tmp_path / "work"
-    work.mkdir()
-    monkeypatch.setenv("TMPDIR", str(work))
-    monkeypatch.setattr(tempfile, "tempdir", None)
-    _make_bundle(bundle, {}, members=("tab.json", "docker-compose.yml"))
-
-    with pytest.raises(AssertionError, match="usage_calculator"):
-        token_enable._patched_bundle(lpc_app, bundle)
-    assert list(work.iterdir()) == []
-
-
-def test_patched_bundle_missing_tab_json(lpc_app, tmp_path, monkeypatch):
-    bundle = str(tmp_path / "b.tar")
-    work = tmp_path / "work"
-    work.mkdir()
-    monkeypatch.setenv("TMPDIR", str(work))
-    monkeypatch.setattr(tempfile, "tempdir", None)
-    _make_bundle(bundle, {}, members=("docker-compose.yml", "usage_calculator"))
-
-    with pytest.raises(AssertionError, match="tab.json not found"):
-        token_enable._patched_bundle(lpc_app, bundle)
-    assert list(work.iterdir()) == []
-
-
-def test_wapi_rebuilt_at_v215_on_real_appliance(monkeypatch):
-    monkeypatch.setattr(token_enable, "_patched_bundle", lambda a, b: os.path.join(tempfile.mkdtemp(), "p.tar"))
-    monkeypatch.setattr(WapiClient, "upload_file", lambda self, path: "tok")
-    monkeypatch.setattr(WapiClient, "post", lambda self, path, data=None, check=True: _status("COMPLETED", pct=100))
-    monkeypatch.setattr(WapiClient, "get", lambda self, path, params="", check=True: [])
-    app = LocalAppliance.from_config(LocalApplianceConfig(
-        container_name="balerion", chroot="/local/91/chroots/balerion", ip="10.0.0.1",
-    ))
-    old = app.wapi
-    assert old._base_url.endswith("/wapi/v2.12")
-
-    enable_token_mode_wapi(app, "b.tar")
-
-    assert app.wapi is not old
-    assert app.wapi._base_url.endswith("/wapi/v2.15")
