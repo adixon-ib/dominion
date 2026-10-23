@@ -12,6 +12,7 @@ from .grid_join import join_grid
 from .grid_leave import leave_grid
 from .licenses import ipc_preflight, licenses
 from .quick_deploy import quick_deploy
+from .license_temp import install_temp_license
 from .token_enable import enable_token_mode, enable_token_mode_wapi
 
 __all__ = [
@@ -19,6 +20,7 @@ __all__ = [
     "enable_token_mode_wapi",
     "fresh_install",
     "ipc_preflight",
+    "install_temp_license",
     "join_grid",
     "leave_grid",
     "licenses",
