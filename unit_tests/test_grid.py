@@ -90,7 +90,16 @@ def test_parse_tag_file_master_only(tmp_path):
 
     result = _parse_tag_file(str(tag_file))
 
-    assert result == {"master": {"hostname": "vm-03-89", "ip": "10.35.211.3"}}
+    assert result == {"master": {"hostname": "vm-03-89", "ip": "10.35.211.3", "image": ""}}
+
+
+def test_parse_tag_file_master_image(tmp_path):
+    tag_file = tmp_path / "mygrid.xml"
+    tag_file.write_text(
+        '<root><master UNIT_1_ID="vm-03-89" UNIT_1_IPADDR="10.35.211.3" image="a.ova"/></root>'
+    )
+
+    assert _parse_tag_file(str(tag_file))["master"]["image"] == "a.ova"
 
 
 def test_parse_tag_file_master_plus_members(tmp_path):
