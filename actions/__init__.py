@@ -10,9 +10,9 @@ from .appliance_reset_all import reset_all
 from .fresh_install import fresh_install
 from .grid_join import join_grid
 from .grid_leave import leave_grid
+from .license_temp import install_temp_license
 from .licenses import ipc_preflight, licenses
 from .quick_deploy import quick_deploy
-from .license_temp import install_temp_license
 from .token_enable import enable_token_mode, enable_token_mode_wapi
 
 __all__ = [
