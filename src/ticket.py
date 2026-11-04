@@ -15,6 +15,7 @@ needs-propagated skips do not change it).
 
 from __future__ import annotations
 
+import copy
 import json
 import logging
 import os
@@ -208,7 +209,7 @@ class Ticket:
         state: dict | None = None,
     ):
         self.name = name
-        self.state = types.SimpleNamespace(**(state or {}))
+        self.state = types.SimpleNamespace(**copy.deepcopy(state or {}))
         self.host = host
         self.worktree = worktree
         self.wapi_version = wapi_version

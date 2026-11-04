@@ -911,10 +911,14 @@ def test_state_repr_never_raises_and_escapes_newlines(tmp_path):
     deep = []
     for _ in range(5000):
         deep = [deep]
-    t = make(tmp_path, state={
-        "bad": Bad(), "multi": Multi(), "circular": circular, "deep": deep,
-    })
-    code, text = run_ticket(t, lambda t: t.phase("1. connect", t.connect))
+    t = make(tmp_path, state={"bad": Bad(), "multi": Multi()})
+
+    def body(t):
+        t.state.circular = circular
+        t.state.deep = deep
+        t.phase("1. connect", t.connect)
+
+    code, text = run_ticket(t, body)
     report = read_report(t)
     assert code == 0
     assert "- bad: <unrepresentable Bad>" in report
@@ -922,3 +926,14 @@ def test_state_repr_never_raises_and_escapes_newlines(tmp_path):
     assert "- circular: [[...]]" in report
     assert "- deep: " in report
     assert "passed" in text
+
+
+def test_state_is_deep_copied_per_ticket(tmp_path):
+    defaults = {"probes": [], "nested": {"k": [1]}}
+    a = make(tmp_path, state=defaults)
+    b = make(tmp_path, state=defaults)
+    a.state.probes.append("x")
+    a.state.nested["k"].append(2)
+    assert defaults == {"probes": [], "nested": {"k": [1]}}
+    assert b.state.probes == []
+    assert b.state.nested == {"k": [1]}
