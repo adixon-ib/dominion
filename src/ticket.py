@@ -127,6 +127,18 @@ def _dump(v) -> str:
     return json.dumps(v, separators=(", ", ": "), sort_keys=True, ensure_ascii=False)
 
 
+def _show(value) -> str:
+    """One line for a state value. Never raises."""
+    try:
+        return _dump(value)
+    except (TypeError, ValueError, RecursionError):
+        pass
+    try:
+        return repr(value).replace("\n", "\\n")
+    except Exception:
+        return f"<unrepresentable {type(value).__name__}>"
+
+
 def _compact(text: str, containers_only: bool = False) -> str:
     """One line per list element, or one line for anything else. Not JSON: as is."""
     try:
@@ -452,11 +464,7 @@ class Ticket:
         if vars(self.state):
             lines += ["", "## State at exit"]
             for key, value in sorted(vars(self.state).items()):
-                try:
-                    shown = _dump(value)
-                except (TypeError, ValueError, RecursionError):
-                    shown = repr(value)
-                lines.append(f"- {key}: {shown}")
+                lines.append(f"- {key}: {_show(value)}")
         for title, items in (("Warnings", self._warnings), ("Notes", self._notes)):
             if items:
                 lines += ["", f"## {title}", *[f"- {i}" for i in items]]

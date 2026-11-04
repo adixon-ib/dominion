@@ -1,6 +1,7 @@
 """Unit tests for ticket.py: Ticket and Checks. No network, docker or lab tools."""
 
 import contextlib
+import datetime
 import json
 import os
 import re
@@ -884,8 +885,6 @@ def test_state_defaults_and_runtime_fields_sorted_after_phases(tmp_path):
 
 
 def test_state_non_json_values_fall_back_to_repr(tmp_path):
-    import datetime
-
     class Thing:
         def __repr__(self):
             return "<Thing>"
@@ -896,3 +895,30 @@ def test_state_non_json_values_fall_back_to_repr(tmp_path):
     report = read_report(t)
     assert "- thing: <Thing>" in report
     assert f"- when: {when!r}" in report
+
+
+def test_state_repr_never_raises_and_escapes_newlines(tmp_path):
+    class Bad:
+        def __repr__(self):
+            raise RuntimeError("no repr")
+
+    class Multi:
+        def __repr__(self):
+            return "a\nb"
+
+    circular = []
+    circular.append(circular)
+    deep = []
+    for _ in range(5000):
+        deep = [deep]
+    t = make(tmp_path, state={
+        "bad": Bad(), "multi": Multi(), "circular": circular, "deep": deep,
+    })
+    code, text = run_ticket(t, lambda t: t.phase("1. connect", t.connect))
+    report = read_report(t)
+    assert code == 0
+    assert "- bad: <unrepresentable Bad>" in report
+    assert "- multi: a\\nb" in report
+    assert "- circular: [[...]]" in report
+    assert "- deep: " in report
+    assert "passed" in text
