@@ -230,8 +230,10 @@ class Ticket:
         sink = self._current["checks"] if self._current is not None else None
         return Checks(what, sink)
 
-    def _skip(self, section: dict, reason: str, blocked: bool) -> Phase:
-        self.run.skip(section["name"], reason)
+    def _skip(
+        self, section: dict, reason: str, blocked: bool, unmet: bool = False,
+    ) -> Phase:
+        self.run.skip(section["name"], reason, _counts_as_failure=unmet)
         section["reason"] = reason
         self._sections.append(section)
         return Phase(section["name"], "SKIP", reason, blocked=blocked)
@@ -300,7 +302,9 @@ class Ticket:
             return Phase(name, self._step(section, lambda: self._reraise(crashed)))
         if not_met:
             self._unmet.append(f"{name}: {', '.join(not_met)}")
-            return self._skip(section, "not met: " + ", ".join(not_met), blocked=True)
+            return self._skip(
+                section, "not met: " + ", ".join(not_met), blocked=True, unmet=True,
+            )
         return Phase(name, self._step(section, fn))
 
     @staticmethod
@@ -347,12 +351,7 @@ class Ticket:
                 )
             self._run_cleanups()
             self._write_report()
-            try:
-                self.run.summary(extra=self._extra(), _allow_no_target=True)
-            except SystemExit as e:
-                if self._unmet and not e.code:
-                    raise SystemExit(1) from None
-                raise
+            self.run.summary(extra=self._extra(), _allow_no_target=True)
         finally:
             _rebind_log_handlers(sys.stderr, old_err)
             sys.stdout, sys.stderr = old_out, old_err

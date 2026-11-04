@@ -93,7 +93,7 @@ class Run:
         })
         return result
 
-    def skip(self, name, reason=""):
+    def skip(self, name, reason="", *, _counts_as_failure=False):
         """Record a named test step as skipped, without running it.
 
         Args:
@@ -105,7 +105,7 @@ class Run:
         self._skipped += 1
         self._results.append({
             "status": "SKIP", "name": name, "duration": 0.0,
-            "error": None, "reason": reason,
+            "error": None, "reason": reason, "counts_as_failure": _counts_as_failure,
         })
 
     def summary(
@@ -153,7 +153,11 @@ class Run:
                 print(f"  {name}")
             for line in extra:
                 print(line)
-        sys.exit(1 if self._failed else 0)
+        sys.exit(1 if self._failed or self._skip_failures() else 0)
+
+    def _skip_failures(self) -> int:
+        """Skips Ticket marks as failures (unmet preconditions)."""
+        return sum(1 for r in self._results if r.get("counts_as_failure"))
 
     def _dump_infoblox_logs(self) -> None:
         for target in self._targets:
@@ -231,8 +235,8 @@ class Run:
         testsuite = ET.SubElement(testsuites, "testsuite", {
             "name": self.script,
             "errors": "0",
-            "failures": str(self._failed),
-            "skipped": str(self._skipped),
+            "failures": str(self._failed + self._skip_failures()),
+            "skipped": str(self._skipped - self._skip_failures()),
             "tests": str(self._passed + self._failed + self._skipped),
             "time": f"{total_time:.3f}",
             "timestamp": datetime.now().isoformat(),
@@ -253,6 +257,8 @@ class Run:
             if r["status"] == "FAIL":
                 failure = ET.SubElement(case, "failure", {"message": "test failed"})
                 failure.text = r["error"] or ""
+            elif r.get("counts_as_failure"):
+                ET.SubElement(case, "failure", {"message": r.get("reason", "")})
             elif r["status"] == "SKIP":
                 ET.SubElement(case, "skipped", {"message": r.get("reason", "")})
 

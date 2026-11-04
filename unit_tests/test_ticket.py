@@ -669,3 +669,34 @@ def test_body_exception_plus_unmet_pre_exits_one(tmp_path):
     assert code == 1
     assert "interrupted: ValueError" in text
     assert "UNMET (exit 1): 1. a: thing" in text
+
+
+def _junit(t):
+    import xml.etree.ElementTree as ET
+
+    root = ET.parse(os.path.join(t.output_dir, "junit.xml")).getroot()
+    suite = root.find("testsuite")
+    return suite, {c.get("name"): c for c in suite.findall("testcase")}
+
+
+def test_unmet_pre_is_a_junit_failure(tmp_path):
+    t = make(tmp_path)
+    run_ticket(
+        t, lambda t: t.phase("1. a", lambda: None, pre=[("thing", lambda: False)]),
+    )
+    suite, cases = _junit(t)
+    assert suite.get("failures") == "1"
+    assert suite.get("skipped") == "0"
+    failure = cases["1. a"].find("failure")
+    assert failure.get("message") == "not met: thing"
+    assert cases["1. a"].find("skipped") is None
+
+
+def test_deliberate_skip_stays_skipped_in_junit(tmp_path):
+    t = make(tmp_path)
+    run_ticket(t, lambda t: t.phase("1. a", boom, skip="no --deploy"))
+    suite, cases = _junit(t)
+    assert suite.get("failures") == "0"
+    assert suite.get("skipped") == "1"
+    assert cases["1. a"].find("skipped") is not None
+    assert cases["1. a"].find("failure") is None
