@@ -397,7 +397,10 @@ def test_unmet_pre_skips_blocks_dependants_and_names_label(tmp_path):
     t = make(tmp_path)
     code, text = run_ticket(t, body)
     report = read_report(t)
-    assert code == 0
+    assert code == 1
+    assert "- Verdict: FAIL" in report
+    assert "0 failed, 2 skipped" in text
+    assert "SKIP  5. a" in text
     assert ran == []
     assert phases["a"].status == "SKIP"
     assert phases["a"].blocked
@@ -616,3 +619,30 @@ def test_render_wapi_error_body_is_raw_text_in_fence():
         "body": None, "status": 0, "response": "",
     }))
     assert text == "GET /wapi/v2.15/x  -> 0"
+
+
+def test_unmet_pre_alone_exits_one_with_skip_line(tmp_path):
+    t = make(tmp_path)
+    code, text = run_ticket(
+        t, lambda t: t.phase("1. a", lambda: None, pre=[("thing", lambda: False)]),
+    )
+    assert code == 1
+    assert "SKIP  1. a" in text
+    assert "not met: thing" in text
+    assert "0 passed, 0 failed, 1 skipped" in text
+
+
+def test_deliberate_skip_alone_exits_zero(tmp_path):
+    code, _ = run_ticket(
+        make(tmp_path), lambda t: t.phase("1. a", boom, skip="no --deploy"),
+    )
+    assert code == 0
+
+
+def test_needs_propagated_skip_alone_does_not_force_failure(tmp_path):
+    def body(t):
+        skipped = t.phase("1. a", boom, skip="no --deploy")
+        t.phase("2. b", lambda: None, needs=skipped)
+
+    code, _ = run_ticket(make(tmp_path), body)
+    assert code == 0

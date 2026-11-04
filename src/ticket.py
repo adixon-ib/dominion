@@ -8,7 +8,9 @@
 Writes run.log (stdout, stderr and logger output), report.md (per phase:
 preconditions, WAPI and shell calls, checks, errors), summary.txt and
 junit.xml under a timestamped directory, and exits the process on leaving the
-block: 1 if any phase, cleanup or the block itself failed, else 0.
+block: 1 if any phase, cleanup or the block itself failed or a phase was
+skipped for an unmet `pre` precondition, else 0 (deliberate `skip=` and
+needs-propagated skips do not change it).
 """
 
 from __future__ import annotations
@@ -175,6 +177,7 @@ class Ticket:
         self._notes: list[str] = []
         self._sections: list[dict] = []
         self._current: dict | None = None
+        self._unmet_pre = False
         self._saved: tuple | None = None
         self._logfile = None
         self._log = create_logger(name="dominion.ticket")
@@ -296,6 +299,7 @@ class Ticket:
         if crashed is not None:
             return Phase(name, self._step(section, lambda: self._reraise(crashed)))
         if not_met:
+            self._unmet_pre = True
             return self._skip(section, "not met: " + ", ".join(not_met), blocked=True)
         return Phase(name, self._step(section, fn))
 
@@ -343,7 +347,12 @@ class Ticket:
                 )
             self._run_cleanups()
             self._write_report()
-            self.run.summary(extra=self._extra(), _allow_no_target=True)
+            try:
+                self.run.summary(extra=self._extra(), _allow_no_target=True)
+            except SystemExit as e:
+                if self._unmet_pre and not e.code:
+                    raise SystemExit(1) from None
+                raise
         finally:
             _rebind_log_handlers(sys.stderr, old_err)
             sys.stdout, sys.stderr = old_out, old_err
@@ -379,7 +388,7 @@ class Ticket:
 
     def _write_report(self) -> None:
         run = self.run
-        verdict = "FAIL" if run._failed else "PASS"
+        verdict = "FAIL" if run._failed or self._unmet_pre else "PASS"
         lines = [
             f"# {self.name}",
             "",
