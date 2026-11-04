@@ -177,7 +177,7 @@ class Ticket:
         self._notes: list[str] = []
         self._sections: list[dict] = []
         self._current: dict | None = None
-        self._unmet_pre = False
+        self._unmet: list[str] = []
         self._saved: tuple | None = None
         self._logfile = None
         self._log = create_logger(name="dominion.ticket")
@@ -299,7 +299,7 @@ class Ticket:
         if crashed is not None:
             return Phase(name, self._step(section, lambda: self._reraise(crashed)))
         if not_met:
-            self._unmet_pre = True
+            self._unmet.append(f"{name}: {', '.join(not_met)}")
             return self._skip(section, "not met: " + ", ".join(not_met), blocked=True)
         return Phase(name, self._step(section, fn))
 
@@ -350,7 +350,7 @@ class Ticket:
             try:
                 self.run.summary(extra=self._extra(), _allow_no_target=True)
             except SystemExit as e:
-                if self._unmet_pre and not e.code:
+                if self._unmet and not e.code:
                     raise SystemExit(1) from None
                 raise
         finally:
@@ -384,11 +384,12 @@ class Ticket:
             f"dominion {PACKAGE_DIR}: {_git_rev(PACKAGE_DIR)}",
             *[f"WARNING: {w}" for w in self._warnings],
             *[f"NOTE: {n}" for n in self._notes],
+            *[f"UNMET (exit 1): {u}" for u in self._unmet],
         ]
 
     def _write_report(self) -> None:
         run = self.run
-        verdict = "FAIL" if run._failed or self._unmet_pre else "PASS"
+        verdict = "FAIL" if run._failed or self._unmet else "PASS"
         lines = [
             f"# {self.name}",
             "",

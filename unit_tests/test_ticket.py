@@ -398,6 +398,7 @@ def test_unmet_pre_skips_blocks_dependants_and_names_label(tmp_path):
     code, text = run_ticket(t, body)
     report = read_report(t)
     assert code == 1
+    assert "UNMET (exit 1): 5. a: archive present, reachable" in text.splitlines()
     assert "- Verdict: FAIL" in report
     assert "0 failed, 2 skipped" in text
     assert "SKIP  5. a" in text
@@ -646,3 +647,25 @@ def test_needs_propagated_skip_alone_does_not_force_failure(tmp_path):
 
     code, _ = run_ticket(make(tmp_path), body)
     assert code == 0
+
+
+def test_phase_fail_plus_unmet_pre_exits_one(tmp_path):
+    def body(t):
+        t.phase("1. bad", boom)
+        t.phase("2. a", lambda: None, pre=[("thing", lambda: False)])
+
+    code, text = run_ticket(make(tmp_path), body)
+    assert code == 1
+    assert "FAIL  1. bad" in text
+    assert "UNMET (exit 1): 2. a: thing" in text
+
+
+def test_body_exception_plus_unmet_pre_exits_one(tmp_path):
+    def body(t):
+        t.phase("1. a", lambda: None, pre=[("thing", lambda: False)])
+        raise ValueError("escaped")
+
+    code, text = run_ticket(make(tmp_path), body)
+    assert code == 1
+    assert "interrupted: ValueError" in text
+    assert "UNMET (exit 1): 1. a: thing" in text
