@@ -855,3 +855,44 @@ def test_string_request_body_renders_quoted():
         "status": 200, "response": "",
     }))
     assert 'Request body\n```\n"raw"\n```' in text
+
+
+def test_state_defaults_to_empty_namespace_and_no_section(tmp_path):
+    t = make(tmp_path)
+    assert vars(t.state) == {}
+    run_ticket(t, lambda t: t.phase("1. connect", t.connect))
+    assert "State at exit" not in read_report(t)
+
+
+def test_state_defaults_and_runtime_fields_sorted_after_phases(tmp_path):
+    t = make(tmp_path, state={"zeta": [1, 2], "alpha": {"b": 1, "a": "x"}})
+    assert t.state.zeta == [1, 2]
+
+    def body(t):
+        t.phase("1. connect", t.connect)
+        t.state.mid = 3
+        t.warn("w")
+
+    run_ticket(t, body)
+    report = read_report(t)
+    section = report.split("## State at exit\n")[1].split("\n## ")[0]
+    assert section.splitlines() == [
+        '- alpha: {"a": "x", "b": 1}', "- mid: 3", "- zeta: [1, 2]",
+    ]
+    assert report.index("## 1. connect") < report.index("## State at exit")
+    assert report.index("## State at exit") < report.index("## Warnings")
+
+
+def test_state_non_json_values_fall_back_to_repr(tmp_path):
+    import datetime
+
+    class Thing:
+        def __repr__(self):
+            return "<Thing>"
+
+    when = datetime.datetime(2026, 1, 2, 3, 4, 5)
+    t = make(tmp_path, state={"when": when, "thing": Thing()})
+    run_ticket(t, lambda t: t.phase("1. connect", t.connect))
+    report = read_report(t)
+    assert "- thing: <Thing>" in report
+    assert f"- when: {when!r}" in report

@@ -21,6 +21,7 @@ import os
 import re
 import subprocess
 import sys
+import types
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 
@@ -122,21 +123,20 @@ def _fence(text: str, lang: str = "") -> str:
     return f"{ticks}{lang}\n{text.rstrip(chr(10))}\n{ticks}"
 
 
+def _dump(v) -> str:
+    return json.dumps(v, separators=(", ", ": "), sort_keys=True, ensure_ascii=False)
+
+
 def _compact(text: str, containers_only: bool = False) -> str:
     """One line per list element, or one line for anything else. Not JSON: as is."""
-    def dump(v):
-        return json.dumps(
-            v, separators=(", ", ": "), sort_keys=True, ensure_ascii=False,
-        )
-
     try:
         v = json.loads(text)
     except (ValueError, RecursionError):
         return _fence(text)
     if containers_only and not isinstance(v, dict | list):
         return _fence(text)
-    return _fence("\n".join(dump(el) for el in v) if v and isinstance(v, list)
-                  else dump(v))
+    return _fence("\n".join(_dump(el) for el in v) if v and isinstance(v, list)
+                  else _dump(v))
 
 
 def _collapse(calls: list[dict]) -> list[tuple[dict, int]]:
@@ -185,7 +185,7 @@ def _new_section(name: str, pre: list | None = None) -> dict:
 
 
 class Ticket:
-    def __init__(
+    def __init__(  # noqa: PLR0913
         self,
         name: str,
         host: str | None,
@@ -193,8 +193,10 @@ class Ticket:
         results_dir: str | None = None,
         worktree: str | None = None,
         wapi_version: str = WAPI_VERSION,
+        state: dict | None = None,
     ):
         self.name = name
+        self.state = types.SimpleNamespace(**(state or {}))
         self.host = host
         self.worktree = worktree
         self.wapi_version = wapi_version
@@ -447,6 +449,14 @@ class Ticket:
                 lines += ["", "Calls"]
                 for call, n in _collapse(sec["calls"]):
                     lines += _render_call(call, n)
+        if vars(self.state):
+            lines += ["", "## State at exit"]
+            for key, value in sorted(vars(self.state).items()):
+                try:
+                    shown = _dump(value)
+                except (TypeError, ValueError, RecursionError):
+                    shown = repr(value)
+                lines.append(f"- {key}: {shown}")
         for title, items in (("Warnings", self._warnings), ("Notes", self._notes)):
             if items:
                 lines += ["", f"## {title}", *[f"- {i}" for i in items]]

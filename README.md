@@ -165,7 +165,7 @@ def member_latch(t):
         c.expect("upsize_status", "OVERAGE_UPSIZE", rows[0]["upsize_status"])
 ```
 
-A phase is skipped (and its dependants with it) when a `needs` phase failed or was skipped, or a `pre` precondition is unmet. A `skip=` reason is a deliberate skip: it does not block dependants or change the exit code. An unmet `pre` shows as SKIP but exits 1. Use `t.container.sh(cmd)` for shell commands in the NIOS container. Request bodies, sh commands and responses are recorded as given, with no masking, so keep secrets out of them.
+A phase is skipped (and its dependants with it) when a `needs` phase failed or was skipped, or a `pre` precondition is unmet. A `skip=` reason is a deliberate skip: it does not block dependants or change the exit code. An unmet `pre` shows as SKIP but exits 1. `Ticket(..., state={...})` gives `t.state`, a namespace for values shared between phases; its fields are listed in `report.md` under "State at exit". Use `t.container.sh(cmd)` for shell commands in the NIOS container. Request bodies, sh commands and responses are recorded as given, with no masking, so keep secrets out of them.
 
 ### Results
 
