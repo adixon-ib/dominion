@@ -1,4 +1,10 @@
-from .src.appliance import Appliance, LocalAppliance, reset_console, ssh_reachable
+from .src.appliance import (
+    Appliance,
+    LocalAppliance,
+    lab_network,
+    reset_console,
+    ssh_reachable,
+)
 from .src.build import NiosBuild
 from .src.config import (
     DEFAULT_RESULTS_DIR,
@@ -25,6 +31,7 @@ from .src.grid import Grid
 from .src.harness import Run
 from .src.log import LogDump, LogMark, create_logger, resolve_log_file
 from .src.session import ConsoleConnectSession, ConsoleSession, ShellSession
+from .src.ticket import Checks, Ticket
 from .src.transport import (
     CommandError,
     LocalDockerTransport,
@@ -46,6 +53,7 @@ __all__ = [
     "Appliance",
     "ApplianceConfig",
     "BuildConfig",
+    "Checks",
     "CommandError",
     "ConsoleConnectSession",
     "ConsoleSession",
@@ -66,10 +74,12 @@ __all__ = [
     "Run",
     "SSHDockerTransport",
     "ShellSession",
+    "Ticket",
     "TransportError",
     "WapiClient",
     "WapiError",
     "create_logger",
+    "lab_network",
     "reset_console",
     "resolve_log_file",
     "ssh_reachable",

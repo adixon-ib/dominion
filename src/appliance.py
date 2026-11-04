@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import subprocess
 import time
 from contextlib import contextmanager
@@ -45,6 +46,27 @@ def reset_console(hostname: str) -> None:
     subprocess.run(["reset_console", "-H", hostname], check=True)
 
 
+def lab_network(hostname: str) -> tuple[str, str, str]:
+    """Query get_lab_info for the appliance's LAN (ip, netmask, gateway)."""
+    result = subprocess.run(
+        ["get_lab_info", "-H", hostname],
+        capture_output=True, text=True, check=True,
+    )
+    output = result.stdout
+
+    ip_match = re.search(r"LAN_IPADDR=(\S+)", output)
+    mask_match = re.search(r"LAN_NETMASK=(\S+)", output)
+    gw_match = re.search(r"LAN_ROUTER=(\S+)", output)
+
+    if not (ip_match and mask_match and gw_match):
+        raise RuntimeError(
+            f"Failed to parse LAN settings from get_lab_info for {hostname}. "
+            f"Output: {output!r}"
+        )
+
+    return ip_match.group(1), mask_match.group(1), gw_match.group(1)
+
+
 class _ApplianceBase:
 
     def __init__(self, container: NiosContainer, logger: NiosLogger):
@@ -52,6 +74,7 @@ class _ApplianceBase:
         self._logger = logger
         self._wapi: WapiClient | None = None
         self._wapi_version: str = WAPI_VERSION
+        self._on_call = None
 
     @property
     def wapi(self) -> WapiClient:
@@ -61,7 +84,21 @@ class _ApplianceBase:
                 version=self._wapi_version,
                 logger=self._logger,
             )
+            self._wapi.on_call = self._on_call
         return self._wapi
+
+    @property
+    def on_call(self):
+        """Optional hook called with a record dict for every WAPI request and
+        container.sh() call. None (default) records nothing."""
+        return self._on_call
+
+    @on_call.setter
+    def on_call(self, fn) -> None:
+        self._on_call = fn
+        self.container.on_call = fn
+        if self._wapi is not None:
+            self._wapi.on_call = fn
 
     @property
     def wapi_version(self) -> str:

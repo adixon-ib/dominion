@@ -546,3 +546,106 @@ def test_count_infoblox_log_delegates(fake_transport_factory):
         logger=LOGGER,
     )
     assert c.count_infoblox_log("token") == 12
+
+
+# -- sh() -------------------------------------------------------------------------
+
+def test_sh_wraps_command_in_quoted_sh_c(fake_transport):
+    c = NiosContainer(
+        container_name="nios", transport=fake_transport,
+        chroot=DEFAULT_CHROOT, logger=LOGGER,
+    )
+    fake_transport.responses["echo"] = (0, "it's\n", "")
+    assert c.sh("echo 'it'\"'\"'s' | wc -l") == (0, "it's\n", "")
+    assert fake_transport.calls[-1] == (
+        "run", "sh -c 'echo '\"'\"'it'\"'\"'\"'\"'\"'\"'\"'\"'s'\"'\"' | wc -l'",
+    )
+
+
+def test_sh_check_flag_is_passed_through(fake_transport):
+    from dominion import CommandError
+
+    c = NiosContainer(
+        container_name="nios", transport=fake_transport,
+        chroot=DEFAULT_CHROOT, logger=LOGGER,
+    )
+    fake_transport.responses["false"] = (1, "", "boom")
+    assert c.sh("false", check=False) == (1, "", "boom")
+    with pytest.raises(CommandError):
+        c.sh("false")
+
+
+def test_sh_hook_records_success_and_command_error(fake_transport):
+    from dominion import CommandError
+
+    c = NiosContainer(
+        container_name="nios", transport=fake_transport,
+        chroot=DEFAULT_CHROOT, logger=LOGGER,
+    )
+    records = []
+    c.on_call = records.append
+    fake_transport.responses["ok"] = (0, "fine\n", "w")
+    fake_transport.responses["bad"] = (3, "partial", "nope")
+    c.sh("ok")
+    with pytest.raises(CommandError):
+        c.sh("bad")
+    assert records == [
+        {"kind": "sh", "cmd": "ok", "rc": 0, "stdout": "fine\n", "stderr": "w"},
+        {"kind": "sh", "cmd": "bad", "rc": 3, "stdout": "partial", "stderr": "nope"},
+    ]
+
+
+def test_sh_without_hook_records_nothing(fake_transport):
+    c = NiosContainer(
+        container_name="nios", transport=fake_transport,
+        chroot=DEFAULT_CHROOT, logger=LOGGER,
+    )
+    assert c.on_call is None
+    assert c.sh("ok") == (0, "", "")
+
+
+def test_sh_hook_records_transport_error_then_raises(fake_transport):
+    from dominion import TransportError
+
+    c = NiosContainer(
+        container_name="nios", transport=fake_transport,
+        chroot=DEFAULT_CHROOT, logger=LOGGER,
+    )
+    records = []
+    c.on_call = records.append
+
+    def boom(cmd, check=True, **kw):
+        raise TransportError("ssh died")
+
+    fake_transport.run = boom
+    with pytest.raises(TransportError):
+        c.sh("ls")
+    assert records == [
+        {"kind": "sh", "cmd": "ls", "rc": -1, "stdout": "", "stderr": "ssh died"},
+    ]
+
+
+def test_sh_raising_hook_does_not_replace_result(fake_transport):
+    c = NiosContainer(
+        container_name="nios", transport=fake_transport,
+        chroot=DEFAULT_CHROOT, logger=LOGGER,
+    )
+    c.on_call = lambda r: 1 / 0
+    assert c.sh("ok") == (0, "", "")
+
+
+def test_hook_is_per_container_and_class_default_stays_none(fake_transport_factory):
+    a, b = (
+        NiosContainer(
+            container_name="nios", transport=fake_transport_factory(),
+            chroot=DEFAULT_CHROOT, logger=LOGGER,
+        )
+        for _ in range(2)
+    )
+    records = []
+    a.on_call = records.append
+    a.sh("x")
+    b.sh("y")
+    assert [r["cmd"] for r in records] == ["x"]
+    assert b.on_call is None
+    assert NiosContainer.on_call is None

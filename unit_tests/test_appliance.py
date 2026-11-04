@@ -480,3 +480,60 @@ def test_reset_console_raises_on_failure(monkeypatch):
     monkeypatch.setattr(appliance_mod.subprocess, "run", fake_run)
     with pytest.raises(sp.CalledProcessError):
         reset_console("vm-04-89")
+
+
+# -- lab_network ------------------------------------------------------------------
+
+def test_lab_network_parses_get_lab_info(monkeypatch):
+    out = "LAN_IPADDR=10.1.2.3\nLAN_NETMASK=255.255.255.0\nLAN_ROUTER=10.1.2.1\n"
+    calls = []
+
+    def fake_run(cmd, **kw):
+        calls.append(cmd)
+        return type("R", (), {"stdout": out})()
+
+    monkeypatch.setattr(appliance_mod.subprocess, "run", fake_run)
+    assert appliance_mod.lab_network("vm-1") == ("10.1.2.3", "255.255.255.0", "10.1.2.1")
+    assert calls == [["get_lab_info", "-H", "vm-1"]]
+
+
+def test_lab_network_raises_on_missing_fields(monkeypatch):
+    monkeypatch.setattr(
+        appliance_mod.subprocess, "run",
+        lambda *a, **k: type("R", (), {"stdout": "LAN_IPADDR=10.1.2.3\n"})(),
+    )
+    with pytest.raises(RuntimeError, match="vm-1"):
+        appliance_mod.lab_network("vm-1")
+
+
+def test_reset_all_keeps_private_alias():
+    from dominion.actions import appliance_reset_all as mod
+    assert mod._get_lab_network is appliance_mod.lab_network
+
+
+# -- on_call hook -----------------------------------------------------------------
+
+def test_on_call_reaches_container_and_survives_wapi_change(ssh_always_reachable):
+    app = Appliance.from_config(
+        ApplianceConfig(hostname=DEFAULT_HOSTNAME, ip=DEFAULT_IP),
+    )
+    assert app.on_call is None
+    assert app.wapi.on_call is None
+
+    def hook(record):
+        pass
+
+    app.on_call = hook
+    assert app.container.on_call is hook
+    assert app.wapi.on_call is hook
+    app.wapi_version = "v2.15"
+    assert app.wapi.on_call is hook
+
+
+def test_on_call_is_per_appliance(ssh_always_reachable):
+    cfg = ApplianceConfig(hostname=DEFAULT_HOSTNAME, ip=DEFAULT_IP)
+    a, b = Appliance.from_config(cfg), Appliance.from_config(cfg)
+    a.on_call = lambda r: None
+    assert b.on_call is None
+    assert b.container.on_call is None
+    assert b.wapi.on_call is None

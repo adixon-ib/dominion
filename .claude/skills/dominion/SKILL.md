@@ -10,7 +10,7 @@ The code is the catalog. Before writing a helper, read `actions/__init__.py` (ac
 
 ## Using the library
 
-- Use the existing API for every appliance interaction: `app.wapi` for WAPI, `app.container._transport` `run()`/`upload()` for commands and files, `console_connect_session()` for the CLI and reboots, the `app.deploy_*` methods for deploys, `mark_infoblox_log()`/`dump_infoblox_log()` for logs. No hand-spawned `console_connect`, curl, ssh, scp or pexpect.
+- Use the existing API for every appliance interaction: `app.wapi` for WAPI, `app.container.sh(cmd, check=True)` for shell commands (returns `(rc, stdout, stderr)`), `app.container._transport.upload()` for files, `console_connect_session()` for the CLI and reboots, the `app.deploy_*` methods for deploys, `mark_infoblox_log()`/`dump_infoblox_log()` for logs. No hand-spawned `console_connect`, curl, ssh, scp or pexpect.
 - Entry point: `Appliance` for lab appliances. `LocalNiosContainer` and `LocalAppliance` only when asked (NCC). Never construct `NiosContainer`. Build with `from_config()` and keep every value in an uppercase constant, never a bare literal in the `*Config` call.
 - Do not add dominion to `sys.path`. It is pip -e installed. To run against another checkout, put the parent of a directory named `dominion` on `PYTHONPATH`.
 - `ConsoleSession` (SSH) dies when NIOS reboots. For any flow that reboots (grid join, network change, reset), use `console_connect_session()`, close the session that sent the reboot command, then open a new one to confirm the box is back. Do not `expect()` through a reboot. `ConsoleConnectSession` needs a lab-registered `Appliance`.
@@ -26,11 +26,13 @@ The code is the catalog. Before writing a helper, read `actions/__init__.py` (ac
 
 Reusable scripts (`/blox/adixon1/scripts/appliance/`): CLI args or env vars for inputs, validated before building dominion objects. Exit 0 on success, non-zero on failure, messages with hostname, operation and the actual error. No `Run` harness. Reuse an action before writing logic.
 
-Run harness (`src/harness.py`), for tests that use dominion: `run = Run()` first, `run.add(target)` for every target, `output_dir=run.output_dir` in every config, `try/finally: run.summary()`. A phase whose prerequisite failed gets `run.skip(name, reason)`. Console expect patterns come from real NIOS output, not guesses. Timeouts are explicit (boot 300s, httpd 45s).
+Ticket tests use `Ticket` (`src/ticket.py`): `with Ticket(name, host, results_dir=..., worktree=...) as t:`, `t.phase(name, fn, needs=, pre=, skip=)`, `t.cleanup(fn)`, `t.checks(what)`, `t.container.sh()`. It owns `run.log`, `report.md`, the summary and cleanup. Share values between phases on `t.state` (`Ticket(..., state={...})`, listed in `report.md`). Do not copy Tee/Lab/step plumbing. `lab_network(hostname)` gives the lab IP.
+
+Run harness (`src/harness.py`), for other harness use of dominion: `run = Run()` first, `run.add(target)` for every target, `output_dir=run.output_dir` in every config, `try/finally: run.summary()`. A phase whose prerequisite failed gets `run.skip(name, reason)`. Console expect patterns come from real NIOS output, not guesses. Timeouts are explicit (boot 300s, httpd 45s).
 
 ## Changing the library
 
-Layout: `src/` (appliance, container, transport, session, wapi, deploy, harness, log, grid, build, config, constants), `actions/` (multi-step workflows over an `Appliance`), `unit_tests/`.
+Layout: `src/` (appliance, container, transport, session, wapi, deploy, harness, ticket, log, grid, build, config, constants), `actions/` (multi-step workflows over an `Appliance`), `unit_tests/`.
 
 - New action: `actions/<name>.py`, takes `Appliance`/`LocalAppliance`, uses dominion primitives, logs via `app._logger` (no `print`), exported from `actions/__init__.py`.
 - New deploy method: on `DeployMixin` in `src/deploy.py`. File lists are UPPERCASE constants at the top. Upload, hash-verify, restart if needed, return `DeployResult`. Clean `__pycache__` after Python deploys. Raise `DeployError` with both hashes on mismatch.
@@ -45,4 +47,4 @@ Review checklist (dominion-qa):
 - Conventions (high): `from_config()`, `console_connect_session()` for reboots, no raw curl, ssh, scp or pexpect, logger not `print`.
 - Backwards compatibility (medium): new params have defaults, no renamed public names without aliases, all callers grepped (scripts and ticket tests too).
 - Testing (medium): new logic has a unit test, edge cases covered (timeout, container not running, stale session, non-JSON response).
-- Scripts and tests (medium): hardcoded values that belong in constants or args, `sys.path` hacks, missing `try/finally: run.summary()`, guessed expect patterns.
+- Scripts and tests (medium): hardcoded values that belong in constants or args, `sys.path` hacks, missing `try/finally: run.summary()` or `with Ticket(...)`, guessed expect patterns.

@@ -5,7 +5,7 @@ import re
 
 import pytest
 
-from dominion import WapiClient, WapiError
+from dominion import TransportError, WapiClient, WapiError
 from dominion.src.wapi import _STATUS_MARKER
 
 
@@ -232,3 +232,98 @@ class TestUploadFile:
         with pytest.raises(RuntimeError):
             client.upload_file(str(f))
         assert t.calls[-1].startswith("rm -f /tmp/dominion_upload_")
+
+
+class TestOnCall:
+
+    def _client(self, stdout, records, **kw):
+        client = WapiClient(transport=FakeTransport(stdout=stdout), **kw)
+        client.on_call = records.append
+        return client
+
+    def test_record_has_path_query_status_and_full_body(self):
+        records = []
+        c = self._client(_make_response([{"a": 1}]), records, version="v2.15")
+        c.get("ipc:overage", params="_return_fields=a")
+        assert records == [{
+            "kind": "wapi", "method": "GET",
+            "path": "/wapi/v2.15/ipc:overage?_return_fields=a",
+            "body": None, "status": 200, "response": '[{"a": 1}]',
+        }]
+
+    def test_request_body_recorded_and_no_credentials(self):
+        records = []
+        c = self._client(_make_response({}, 201), records, password="s3cret")
+        c.post("record:a", {"name": "x"})
+        assert records[0]["body"] == {"name": "x"}
+        assert "s3cret" not in str(records)
+        assert "admin" not in str(records)
+
+    def test_recorded_before_wapi_error_with_untruncated_body(self):
+        records = []
+        html = "<html>" + "x" * 500
+        c = self._client(f"{html}\n{_STATUS_MARKER}502", records)
+        with pytest.raises(WapiError) as exc:
+            c.get("grid")
+        assert len(exc.value.body) == 200
+        assert records[0]["status"] == 502
+        assert records[0]["response"] == html
+
+    def test_recorded_before_json_decode_error(self):
+        records = []
+        c = self._client(f"not json\n{_STATUS_MARKER}200", records)
+        with pytest.raises(json.JSONDecodeError):
+            c.get("grid")
+        assert records[0]["response"] == "not json"
+
+    def test_no_hook_changes_nothing(self):
+        c = WapiClient(transport=FakeTransport(stdout=_make_response([1])))
+        assert c.get("grid") == [1]
+
+    def test_body_is_a_snapshot_not_the_callers_dict(self):
+        records = []
+        c = self._client(_make_response({}, 201), records)
+        body = {"n": 1}
+        c.post("record:a", body)
+        body["n"] = 2
+        c.post("record:a", body)
+        assert [r["body"] for r in records] == [{"n": 1}, {"n": 2}]
+
+    def test_hook_is_per_client_and_class_default_stays_none(self):
+        records = []
+        a = self._client(_make_response([1]), records)
+        b = WapiClient(transport=FakeTransport(stdout=_make_response([1])))
+        a.get("grid")
+        b.get("grid")
+        assert len(records) == 1
+        assert b.on_call is None
+        assert WapiClient.on_call is None
+
+    def test_raising_hook_does_not_replace_result(self):
+        c = WapiClient(transport=FakeTransport(stdout=_make_response([1])))
+
+        def bad(record):
+            raise ValueError("hook bug")
+
+        c.on_call = bad
+        assert c.get("grid") == [1]
+
+    def test_hook_error_does_not_replace_wapi_error(self):
+        c = WapiClient(transport=FakeTransport(stdout=f"x\n{_STATUS_MARKER}500"))
+        c.on_call = lambda r: 1 / 0
+        with pytest.raises(WapiError):
+            c.get("grid")
+
+    def test_transport_error_recorded_then_raised(self):
+        records = []
+        c = self._client("", records)
+
+        def boom(cmd, check=True, quiet=False):
+            raise TransportError("ssh timed out")
+
+        c._transport.run = boom
+        with pytest.raises(TransportError):
+            c.get("grid")
+        assert records[0]["status"] == 0
+        assert records[0]["response"] == "ssh timed out"
+        assert records[0]["path"] == "/wapi/v2.12/grid"

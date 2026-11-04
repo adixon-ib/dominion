@@ -6,11 +6,10 @@ Drives 'reset all' via console_connect, then restores networking
 
 from __future__ import annotations
 
-import re
 import subprocess
 import time
 
-from dominion.src.appliance import Appliance
+from dominion.src.appliance import Appliance, lab_network
 from dominion.src.constants import (
     ADDKEYS_TIMEOUT,
     NIOS_REBOOT_TIMEOUT,
@@ -19,25 +18,7 @@ from dominion.src.constants import (
     WAPI_VERSION,
 )
 
-def _get_lab_network(hostname: str) -> tuple[str, str, str]:
-    """Query get_lab_info for the appliance's LAN settings."""
-    result = subprocess.run(
-        ["get_lab_info", "-H", hostname],
-        capture_output=True, text=True, check=True,
-    )
-    output = result.stdout
-
-    ip_match = re.search(r"LAN_IPADDR=(\S+)", output)
-    mask_match = re.search(r"LAN_NETMASK=(\S+)", output)
-    gw_match = re.search(r"LAN_ROUTER=(\S+)", output)
-
-    if not (ip_match and mask_match and gw_match):
-        raise RuntimeError(
-            f"Failed to parse LAN settings from get_lab_info for {hostname}. "
-            f"Output: {output!r}"
-        )
-
-    return ip_match.group(1), mask_match.group(1), gw_match.group(1)
+_get_lab_network = lab_network
 
 
 def _console_set_network(console, ip: str, netmask: str, gateway: str) -> None:

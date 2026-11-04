@@ -15,6 +15,7 @@ import sys
 import time
 import traceback
 import xml.etree.ElementTree as ET
+from collections.abc import Sequence
 from datetime import datetime
 
 from .config import DEFAULT_RESULTS_DIR, Defaults
@@ -92,7 +93,7 @@ class Run:
         })
         return result
 
-    def skip(self, name, reason=""):
+    def skip(self, name, reason="", *, _counts_as_failure=False):
         """Record a named test step as skipped, without running it.
 
         Args:
@@ -104,10 +105,13 @@ class Run:
         self._skipped += 1
         self._results.append({
             "status": "SKIP", "name": name, "duration": 0.0,
-            "error": None, "reason": reason,
+            "error": None, "reason": reason, "counts_as_failure": _counts_as_failure,
         })
 
-    def summary(self, app=None, *, no_ib_log=False):
+    def summary(
+        self, app=None, *, no_ib_log=False, extra: Sequence[str] = (),
+        _allow_no_target=False,
+    ):
         """Print totals, write summary.txt and junit.xml, then exit the process.
 
         Terminates the script with sys.exit(): 1 if any test failed, else 0.
@@ -119,16 +123,17 @@ class Run:
                 callers that pass run.summary(gm)). New code should use
                 run.add(app) instead and call run.summary() with no args.
             no_ib_log: Skip the automatic infoblox.log dump.
+            extra: Lines appended to summary.txt after the steps and printed.
         """
         if app is not None:
             self.add(app)
-        if not self._targets:
+        if not self._targets and not _allow_no_target:
             raise TypeError(
                 "No targets registered. Use run.add(target) or pass one to summary()."
             )
         if not no_ib_log:
             self._dump_infoblox_logs()
-        primary = self._targets[0]
+        primary = self._targets[0] if self._targets else None
         total = self._passed + self._failed + self._skipped
         print(f"\n{'=' * 60}")
         print(
@@ -142,11 +147,17 @@ class Run:
             if "summary.txt" not in files:
                 files.append("summary.txt")
                 files.sort()
-            self._write_summary(primary, files)
+            self._write_summary(primary, files, extra)
             print(f"Logs: {self.output_dir}/")
             for name in files:
                 print(f"  {name}")
-        sys.exit(1 if self._failed else 0)
+            for line in extra:
+                print(line)
+        sys.exit(1 if self._failed or self._skip_failures() else 0)
+
+    def _skip_failures(self) -> int:
+        """Skips Ticket marks as failures (unmet preconditions)."""
+        return sum(1 for r in self._results if r.get("counts_as_failure"))
 
     def _dump_infoblox_logs(self) -> None:
         for target in self._targets:
@@ -159,9 +170,9 @@ class Run:
 
     def _target(self, app) -> str:
         """Label for app in reports. Each app type formats itself via __str__."""
-        return str(app)
+        return "(none)" if app is None else str(app)
 
-    def _write_summary(self, app, files):
+    def _write_summary(self, app, files, extra=()):
         """Write output_dir/summary.txt with the run's target, steps, and totals.
 
         Args:
@@ -200,6 +211,8 @@ class Run:
             f"Logs: {self.output_dir}/",
             *[f"  {name}" for name in files],
         ]
+        if extra:
+            lines += ["", *extra]
 
         summary_path = os.path.join(self.output_dir, "summary.txt")
         os.makedirs(self.output_dir, exist_ok=True)
@@ -222,8 +235,8 @@ class Run:
         testsuite = ET.SubElement(testsuites, "testsuite", {
             "name": self.script,
             "errors": "0",
-            "failures": str(self._failed),
-            "skipped": str(self._skipped),
+            "failures": str(self._failed + self._skip_failures()),
+            "skipped": str(self._skipped - self._skip_failures()),
             "tests": str(self._passed + self._failed + self._skipped),
             "time": f"{total_time:.3f}",
             "timestamp": datetime.now().isoformat(),
@@ -244,6 +257,8 @@ class Run:
             if r["status"] == "FAIL":
                 failure = ET.SubElement(case, "failure", {"message": "test failed"})
                 failure.text = r["error"] or ""
+            elif r.get("counts_as_failure"):
+                ET.SubElement(case, "failure", {"message": r.get("reason", "")})
             elif r["status"] == "SKIP":
                 ET.SubElement(case, "skipped", {"message": r.get("reason", "")})
 
