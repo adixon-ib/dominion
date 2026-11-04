@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any
 
 from .constants import NIOS_CONSOLE_PASSWORD, NIOS_CONSOLE_USER, WAPI_VERSION
 from .log import create_logger
+from .transport import TransportError
 
 if TYPE_CHECKING:
     from .transport import _BaseTransport
@@ -33,7 +34,8 @@ class WapiError(Exception):
 class WapiClient:
     """Thin wrapper around curl-based WAPI calls over a transport.
 
-    `on_call`, if set, receives a record dict for every request.
+    `on_call`, if set, receives a record dict for every request. Bodies and
+    responses are recorded as given, with no masking.
 
     All requests run inside the NIOS container (curl to localhost),
     so the transport must target a container with WAPI running.
@@ -75,11 +77,16 @@ class WapiClient:
             cmd += f" -H 'Content-Type: application/json' -d '{json.dumps(data)}'"
         cmd += f" '{url}'"
 
-        _, out, _ = self._transport.run(cmd, check=False)
+        rec_path = url.removeprefix("https://localhost")
+        try:
+            _, out, _ = self._transport.run(cmd, check=False)
+        except TransportError as e:
+            self._emit(method, rec_path, data, 0, str(e))
+            raise
         body, _, status_str = out.rpartition(_STATUS_MARKER)
         body = body.strip()
         status = int(status_str.strip()) if status_str.strip().isdigit() else 0
-        self._emit(method, url[len("https://localhost"):], data, status, body)
+        self._emit(method, rec_path, data, status, body)
 
         try:
             parsed = json.loads(body) if body else None
@@ -96,11 +103,16 @@ class WapiClient:
         return status, parsed
 
     def _emit(self, method, path, data, status, response) -> None:
-        if self.on_call:
+        if not self.on_call:
+            return
+        try:
             self.on_call({
                 "kind": "wapi", "method": method, "path": path,
-                "body": data, "status": status, "response": response,
+                "body": json.loads(json.dumps(data)),
+                "status": status, "response": response,
             })
+        except Exception:
+            self._logger.exception("on_call hook failed")
 
     def get(self, path: str, params: str = "", check: bool = True) -> Any:
         _, parsed = self._request("GET", path, params=params, check=check)

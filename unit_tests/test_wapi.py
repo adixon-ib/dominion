@@ -5,7 +5,7 @@ import re
 
 import pytest
 
-from dominion import WapiClient, WapiError
+from dominion import TransportError, WapiClient, WapiError
 from dominion.src.wapi import _STATUS_MARKER
 
 
@@ -279,3 +279,51 @@ class TestOnCall:
     def test_no_hook_changes_nothing(self):
         c = WapiClient(transport=FakeTransport(stdout=_make_response([1])))
         assert c.get("grid") == [1]
+
+    def test_body_is_a_snapshot_not_the_callers_dict(self):
+        records = []
+        c = self._client(_make_response({}, 201), records)
+        body = {"n": 1}
+        c.post("record:a", body)
+        body["n"] = 2
+        c.post("record:a", body)
+        assert [r["body"] for r in records] == [{"n": 1}, {"n": 2}]
+
+    def test_hook_is_per_client_and_class_default_stays_none(self):
+        records = []
+        a = self._client(_make_response([1]), records)
+        b = WapiClient(transport=FakeTransport(stdout=_make_response([1])))
+        a.get("grid")
+        b.get("grid")
+        assert len(records) == 1
+        assert b.on_call is None
+        assert WapiClient.on_call is None
+
+    def test_raising_hook_does_not_replace_result(self):
+        c = WapiClient(transport=FakeTransport(stdout=_make_response([1])))
+
+        def bad(record):
+            raise ValueError("hook bug")
+
+        c.on_call = bad
+        assert c.get("grid") == [1]
+
+    def test_hook_error_does_not_replace_wapi_error(self):
+        c = WapiClient(transport=FakeTransport(stdout=f"x\n{_STATUS_MARKER}500"))
+        c.on_call = lambda r: 1 / 0
+        with pytest.raises(WapiError):
+            c.get("grid")
+
+    def test_transport_error_recorded_then_raised(self):
+        records = []
+        c = self._client("", records)
+
+        def boom(cmd, check=True, quiet=False):
+            raise TransportError("ssh timed out")
+
+        c._transport.run = boom
+        with pytest.raises(TransportError):
+            c.get("grid")
+        assert records[0]["status"] == 0
+        assert records[0]["response"] == "ssh timed out"
+        assert records[0]["path"] == "/wapi/v2.12/grid"

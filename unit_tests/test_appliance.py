@@ -528,3 +528,12 @@ def test_on_call_reaches_container_and_survives_wapi_change(ssh_always_reachable
     assert app.wapi.on_call is hook
     app.wapi_version = "v2.15"
     assert app.wapi.on_call is hook
+
+
+def test_on_call_is_per_appliance(ssh_always_reachable):
+    cfg = ApplianceConfig(hostname=DEFAULT_HOSTNAME, ip=DEFAULT_IP)
+    a, b = Appliance.from_config(cfg), Appliance.from_config(cfg)
+    a.on_call = lambda r: None
+    assert b.on_call is None
+    assert b.container.on_call is None
+    assert b.wapi.on_call is None

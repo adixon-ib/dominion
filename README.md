@@ -144,7 +144,7 @@ run.summary(app)
 
 ### Ticket tests
 
-Ticket tests use `Ticket` instead of wiring `Run` by hand. It tees stdout/stderr/logs into `run.log`, connects, gates phases on prerequisites, always runs cleanups, and writes `report.md` (per phase: preconditions, every WAPI and shell call with full responses, checks with expected vs got, errors), `summary.txt` and `junit.xml`. Leaving the block exits 1 on any failure, else 0.
+Ticket tests use `Ticket` instead of wiring `Run` by hand. It tees stdout/stderr/logs into `run.log`, connects, gates phases on prerequisites, always runs cleanups, and writes `report.md` (per phase: preconditions, every WAPI call and `container.sh()` call with full responses, checks with expected vs got, errors), `summary.txt` and `junit.xml`. Leaving the block exits 1 on any failure, else 0.
 
 ```python
 from dominion import Ticket
@@ -165,7 +165,7 @@ def member_latch(t):
         c.expect("upsize_status", "OVERAGE_UPSIZE", rows[0]["upsize_status"])
 ```
 
-A phase is skipped (and its dependants with it) when a `needs` phase failed or was skipped, or a `pre` precondition is unmet. A `skip=` reason is a deliberate skip and does not block dependants. Use `t.container.sh(cmd)` for shell commands in the NIOS container.
+A phase is skipped (and its dependants with it) when a `needs` phase failed or was skipped, or a `pre` precondition is unmet. A `skip=` reason is a deliberate skip and does not block dependants. Use `t.container.sh(cmd)` for shell commands in the NIOS container. Request bodies, sh commands and responses are recorded as given, with no masking, so keep secrets out of them.
 
 ### Results
 

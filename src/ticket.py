@@ -235,7 +235,7 @@ class Ticket:
 
     def _step(self, section: dict, fn: Callable[[], object]) -> str:
         """Run fn as a recorded step, attributing app calls to section."""
-        self._current = section
+        prev, self._current = self._current, section
         try:
             self.run.test(section["name"], fn)
         except BaseException:
@@ -243,7 +243,7 @@ class Ticket:
             self._sections.append(section)
             raise
         finally:
-            self._current = None
+            self._current = prev
         r = self.run._results[-1]
         section.update(status=r["status"], duration=r["duration"], error=r["error"])
         self._sections.append(section)
@@ -261,7 +261,7 @@ class Ticket:
         section = _new_section(name)
         if skip:
             return self._skip(section, skip, blocked=False)
-        deps = [needs] if isinstance(needs, Phase) else list(needs)
+        deps = [needs] if isinstance(needs, Phase) else list(needs or ())
         pre = list(pre)
         unmet = []
         for d in deps:
@@ -275,21 +275,33 @@ class Ticket:
             section["pre"] += [(label, "not evaluated") for label, _ in pre]
             return self._skip(section, "needs " + ", ".join(unmet), blocked=True)
         not_met = []
-        self._current = section
+        crashed = None
+        prev, self._current = self._current, section
         try:
-            for label, check in pre:
+            for i, (label, check) in enumerate(pre):
                 try:
-                    ok, detail = bool(check()), ""
+                    ok = bool(check())
                 except Exception as e:
-                    ok, detail = False, f" ({type(e).__name__}: {e})"
-                section["pre"].append((label, "met" if ok else f"not met{detail}"))
+                    crashed = e
+                    section["pre"].append(
+                        (label, f"not met ({type(e).__name__}: {e})")
+                    )
+                    section["pre"] += [(lb, "not evaluated") for lb, _ in pre[i + 1:]]
+                    break
+                section["pre"].append((label, "met" if ok else "not met"))
                 if not ok:
                     not_met.append(label)
         finally:
-            self._current = None
+            self._current = prev
+        if crashed is not None:
+            return Phase(name, self._step(section, lambda: self._reraise(crashed)))
         if not_met:
             return self._skip(section, "not met: " + ", ".join(not_met), blocked=True)
         return Phase(name, self._step(section, fn))
+
+    @staticmethod
+    def _reraise(exc: BaseException):
+        raise exc
 
     def cleanup(self, fn: Callable[[], object]) -> None:
         self._cleanups.append(fn)
@@ -305,7 +317,7 @@ class Ticket:
     def write(self, name: str, obj) -> str:
         path = os.path.join(self.output_dir, name)
         with open(path, "w") as f:
-            json.dump(obj, f, indent=2, default=str)
+            json.dump(obj, f, indent=2, default=str, sort_keys=True)
         return path
 
     def __enter__(self):
@@ -344,7 +356,18 @@ class Ticket:
             if self._app is None:
                 self._skip(section, "not connected", blocked=False)
             else:
-                self._step(section, fn)
+                self._step(section, self._survive(fn))
+
+    def _survive(self, fn: Callable[[], object]) -> Callable[[], object]:
+        """Make a BaseException (second Ctrl-C) fail this cleanup, not the rest."""
+        def guarded():
+            try:
+                return fn()
+            except Exception:
+                raise
+            except BaseException as e:
+                self._raise_from(e)
+        return guarded
 
     def _extra(self) -> list[str]:
         return [

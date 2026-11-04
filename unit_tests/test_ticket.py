@@ -386,14 +386,11 @@ def test_unmet_pre_skips_blocks_dependants_and_names_label(tmp_path):
     phases = {}
     ran = []
 
-    def raises():
-        raise OSError("no ssh")
-
     def body(t):
         phases["a"] = t.phase(
             "5. a", lambda: ran.append("a"),
             pre=[("backed up", lambda: True), ("archive present", lambda: False),
-                 ("reachable", raises)],
+                 ("reachable", lambda: 0)],
         )
         phases["b"] = t.phase("6. b", lambda: ran.append("b"), needs=phases["a"])
 
@@ -409,8 +406,99 @@ def test_unmet_pre_skips_blocks_dependants_and_names_label(tmp_path):
     assert "not met: archive present, reachable" in text
     assert "- backed up: met" in report
     assert "- archive present: not met\n" in report
-    assert "- reachable: not met (OSError: no ssh)" in report
     assert "## 5. a  SKIP" in report
+
+
+def test_pre_that_raises_fails_the_phase(tmp_path):
+    phases = {}
+    ran = []
+
+    def raises():
+        raise OSError("no ssh")
+
+    def body(t):
+        phases["a"] = t.phase(
+            "5. a", lambda: ran.append("a"),
+            pre=[("backed up", lambda: True), ("reachable", raises),
+                 ("later", lambda: ran.append("later"))],
+        )
+        phases["b"] = t.phase("6. b", lambda: ran.append("b"), needs=phases["a"])
+
+    t = make(tmp_path)
+    code, text = run_ticket(t, body)
+    report = read_report(t)
+    assert code == 1
+    assert ran == []
+    assert phases["a"].status == "FAIL"
+    assert phases["b"].reason == "needs 5. a (failed)"
+    assert "FAIL  5. a" in text
+    assert "OSError: no ssh" in text
+    assert "- reachable: not met (OSError: no ssh)\n- later: not evaluated" in report
+    assert "## 5. a  FAIL" in report
+    assert "Error\n```\nTraceback" in report
+
+
+def test_needs_none_means_no_needs(tmp_path):
+    phases = {}
+    run_ticket(
+        make(tmp_path),
+        lambda t: phases.update(a=t.phase("1. a", lambda: None, needs=None)),
+    )
+    assert phases["a"].status == "PASS"
+
+
+def test_nested_phase_restores_attribution_to_outer(tmp_path):
+    def outer(t):
+        t.container.sh("before")
+        t.phase("inner", lambda: t.container.sh("in inner"))
+        t.container.sh("after")
+
+    t = make(tmp_path)
+
+    def body(t):
+        t.phase("1. connect", t.connect)
+        t.phase("outer", lambda: outer(t))
+
+    run_ticket(t, body)
+    report = read_report(t)
+    inner = report.split("## inner")[1].split("\n## ")[0]
+    assert "in inner" in inner
+    assert "before" not in inner
+    outer_sec = report.split("## outer")[1].split("\n## ")[0]
+    assert "$ before" in outer_sec
+    assert "$ after" in outer_sec
+
+
+def test_second_interrupt_in_cleanup_does_not_stop_the_rest(tmp_path):
+    order = []
+
+    def interrupted():
+        order.append("second")
+        raise KeyboardInterrupt
+
+    def body(t):
+        t.cleanup(lambda: order.append("first"))
+        t.cleanup(interrupted)
+        t.phase("1. connect", t.connect)
+
+    t = make(tmp_path)
+    code, text = run_ticket(t, body)
+    report = read_report(t)
+    assert code == 1
+    assert order == ["second", "first"]
+    assert "FAIL  cleanup 2" in text
+    assert "PASS  cleanup 1" in text
+    assert "KeyboardInterrupt" in report
+    assert os.path.isfile(os.path.join(t.output_dir, "junit.xml"))
+
+
+def test_write_sorts_keys(tmp_path):
+    t = make(tmp_path)
+    with pytest.raises(SystemExit), t:
+        path = t.write("x.json", {"b": 1, "a": 2})
+    with open(path) as f:
+        text = f.read()
+    assert text.index('"a"') < text.index('"b"')
 
 
 def test_unmet_need_leaves_pre_not_evaluated(tmp_path):

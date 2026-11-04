@@ -19,7 +19,7 @@ from .deploy import DeployMixin
 from .log import LogDump, LogMark, create_logger
 from .network import LocalNetworkMixin
 from .session import ShellSession, ConsoleSession
-from .transport import CommandError, LocalDockerTransport
+from .transport import CommandError, LocalDockerTransport, TransportError
 
 if TYPE_CHECKING:
     from .log import NiosLogger
@@ -106,14 +106,21 @@ class NiosContainer(DeployMixin):
         except CommandError as e:
             self._emit_sh(cmd, e.exit_code, e.stdout, e.stderr)
             raise
+        except TransportError as e:
+            self._emit_sh(cmd, -1, "", str(e))
+            raise
         self._emit_sh(cmd, rc, out, err)
         return rc, out, err
 
     def _emit_sh(self, cmd, rc, out, err) -> None:
-        if self.on_call:
+        if not self.on_call:
+            return
+        try:
             self.on_call({
                 "kind": "sh", "cmd": cmd, "rc": rc, "stdout": out, "stderr": err,
             })
+        except Exception:
+            self._logger.exception("on_call hook failed")
 
     def _wait_for_wapi(self, timeout: int = NIOS_WAPI_READY_TIMEOUT) -> None:
         deadline = time.time() + timeout
