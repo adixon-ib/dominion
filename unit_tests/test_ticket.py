@@ -639,7 +639,7 @@ def test_json_stdout_compacted_and_other_stdout_as_is():
     assert render("a\nb c\n").endswith("```\na\nb c\n```")
 
 
-def test_wapi_empty_body_and_no_response():
+def test_wapi_status_zero_with_no_body_renders_header_only():
     text = "\n".join(ticket_mod._render_call({
         "kind": "wapi", "method": "GET", "path": "/wapi/v2.15/x",
         "body": None, "status": 0, "response": "",
@@ -663,12 +663,28 @@ def test_collapse_merges_consecutive_only_and_keeps_last():
     assert got[0][0]["stdout"] == "2"
 
 
-def test_collapse_wapi_by_method_path_and_query():
-    calls = [_wapi("/a?x=1", 500), _wapi("/a?x=1", 200), _wapi("/a?x=2")]
+def test_collapse_wapi_by_method_path_query_and_status():
+    calls = [_wapi("/a?x=1", 200), _wapi("/a?x=1", 200), _wapi("/a?x=1", 500),
+             _wapi("/a?x=2")]
     got = ticket_mod._collapse(calls)
     assert [(c["path"], c["status"], n) for c, n in got] == [
-        ("/a?x=1", 200, 2), ("/a?x=2", 200, 1),
+        ("/a?x=1", 200, 2), ("/a?x=1", 500, 1), ("/a?x=2", 200, 1),
     ]
+
+
+def test_collapse_keeps_posts_with_different_bodies_apart():
+    def post(body):
+        return {"kind": "wapi", "method": "POST", "path": "/wapi/v2.15/x",
+                "body": body, "status": 200, "response": ""}
+
+    calls = [post({"a": 1, "b": 2}), post({"b": 2, "a": 1}), post({"a": 2})]
+    got = ticket_mod._collapse(calls)
+    assert [(c["body"]["a"], n) for c, n in got] == [(1, 2), (2, 1)]
+
+
+def test_collapse_keeps_same_cmd_with_different_rc_apart():
+    got = ticket_mod._collapse([_sh("t", rc=1), _sh("t", rc=1), _sh("t", rc=0)])
+    assert [(c["rc"], n) for c, n in got] == [(1, 2), (0, 1)]
 
 
 def test_render_collapsed_header_shows_count_and_last_result():
@@ -802,3 +818,40 @@ def test_deliberate_skip_stays_skipped_in_junit(tmp_path):
     assert suite.get("skipped") == "1"
     assert cases["1. a"].find("skipped") is not None
     assert cases["1. a"].find("failure") is None
+
+
+def _render_sh(out):
+    return "\n".join(ticket_mod._render_call(_sh("c", out)))
+
+
+def test_stdout_scalars_stay_as_is_only_containers_compact():
+    assert _render_sh("0.10\n").endswith("```\n0.10\n```")
+    assert _render_sh("007\n").endswith("```\n007\n```")
+    assert _render_sh('"a"\n').endswith('```\n"a"\n```')
+    assert _render_sh("[1,\n 2]").endswith("```\n1\n2\n```")
+
+
+def test_output_with_backticks_keeps_the_fence_intact():
+    text = _render_sh("a\n```\nb\n")
+    assert text.endswith("````\na\n```\nb\n````")
+
+
+def test_deeply_nested_json_falls_back_to_text():
+    deep = "[" * 100000 + "]" * 100000
+    assert _render_sh(deep).endswith("```\n" + deep + "\n```")
+
+
+def test_compact_keeps_non_ascii():
+    text = "\n".join(ticket_mod._render_call({
+        "kind": "wapi", "method": "GET", "path": "/p", "body": None,
+        "status": 200, "response": '{"name": "caf\\u00e9"}',
+    }))
+    assert '{"name": "caf\u00e9"}' in text
+
+
+def test_string_request_body_renders_quoted():
+    text = "\n".join(ticket_mod._render_call({
+        "kind": "wapi", "method": "POST", "path": "/p", "body": "raw",
+        "status": 200, "response": "",
+    }))
+    assert 'Request body\n```\n"raw"\n```' in text

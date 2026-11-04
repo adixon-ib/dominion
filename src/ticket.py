@@ -122,29 +122,39 @@ def _fence(text: str, lang: str = "") -> str:
     return f"{ticks}{lang}\n{text.rstrip(chr(10))}\n{ticks}"
 
 
-def _compact(text: str) -> str:
+def _compact(text: str, containers_only: bool = False) -> str:
     """One line per list element, or one line for anything else. Not JSON: as is."""
     def dump(v):
-        return json.dumps(v, separators=(", ", ": "), sort_keys=True)
+        return json.dumps(
+            v, separators=(", ", ": "), sort_keys=True, ensure_ascii=False,
+        )
 
     try:
         v = json.loads(text)
-    except ValueError:
+    except (ValueError, RecursionError):
+        return _fence(text)
+    if containers_only and not isinstance(v, dict | list):
         return _fence(text)
     return _fence("\n".join(dump(el) for el in v) if v and isinstance(v, list)
                   else dump(v))
 
 
 def _collapse(calls: list[dict]) -> list[tuple[dict, int]]:
-    """Merge consecutive calls with the same command, keeping the last."""
+    """Merge consecutive identical calls (same request and result), keeping the last."""
     out: list[tuple[dict, int]] = []
+    last_key = None
     for c in calls:
-        key = (c["kind"], c.get("method"), c.get("path"), c.get("cmd"))
-        if out and out[-1][2] == key:
-            out[-1] = (c, out[-1][1] + 1, key)
+        key = (
+            c["kind"], c.get("method"), c.get("path"), c.get("cmd"),
+            json.dumps(c.get("body"), sort_keys=True, default=str),
+            c.get("status"), c.get("rc"),
+        )
+        if out and key == last_key:
+            out[-1] = (c, out[-1][1] + 1)
         else:
-            out.append((c, 1, key))
-    return [(c, n) for c, n, _ in out]
+            out.append((c, 1))
+        last_key = key
+    return out
 
 
 def _render_call(c: dict, n: int = 1) -> list[str]:
@@ -159,7 +169,8 @@ def _render_call(c: dict, n: int = 1) -> list[str]:
     out = [f"$ {c['cmd']}  -> exit {c['rc']}{times}"]
     for key in ("stdout", "stderr"):
         if c[key].strip():
-            out += [key, _compact(c[key]) if key == "stdout" else _fence(c[key])]
+            body = _compact(c[key], True) if key == "stdout" else _fence(c[key])
+            out += [key, body]
     return out
 
 
