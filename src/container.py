@@ -97,6 +97,10 @@ class NiosContainer(DeployMixin):
         finally:
             session._close()
 
+    def sh(self, cmd: str, check: bool = True) -> tuple[int, str, str]:
+        """Run a shell command line in the container: (exit code, stdout, stderr)."""
+        return self._transport.run(f"sh -c {shlex.quote(cmd)}", check=check)
+
     def _wait_for_wapi(self, timeout: int = NIOS_WAPI_READY_TIMEOUT) -> None:
         deadline = time.time() + timeout
         while time.time() < deadline:

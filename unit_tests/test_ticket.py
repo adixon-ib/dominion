@@ -1,0 +1,304 @@
+"""Unit tests for ticket.py: Ticket and Checks. No network, docker or lab tools."""
+
+import os
+import sys
+
+import pytest
+
+import dominion.src.ticket as ticket_mod
+from dominion import Appliance, Checks, Ticket, create_logger
+from dominion.src.harness import Run
+
+
+class FakeApp:
+    def __init__(self, cfg):
+        self.cfg = cfg
+        self.hostname = cfg.hostname
+        self.wapi_version = None
+        self.container = object()
+
+    def dump_infoblox_log(self, dest):
+        with open(dest, "w") as f:
+            f.write("ib log\n")
+
+    def __str__(self):
+        return f"{self.hostname} ({self.cfg.ip})"
+
+
+@pytest.fixture(autouse=True)
+def fake_lab(monkeypatch):
+    monkeypatch.setattr(ticket_mod, "lab_network", lambda h: ("10.0.0.9", "m", "g"))
+    monkeypatch.setattr(
+        Appliance, "from_config", classmethod(lambda cls, cfg: FakeApp(cfg)),
+    )
+
+
+def make(tmp_path, host="vm-1", **kw):
+    return Ticket("NIOS-1", host, results_dir=str(tmp_path), **kw)
+
+
+def run_ticket(t, body):
+    """Run body inside the Ticket and return (exit code, summary.txt text)."""
+    with pytest.raises(SystemExit) as exc, t:
+        body(t)
+    with open(os.path.join(t.output_dir, "summary.txt")) as f:
+        return exc.value.code, f.read()
+
+
+def boom():
+    raise ValueError("boom")
+
+
+# -- phases -----------------------------------------------------------------------
+
+def test_all_pass_exits_zero_and_none_return_is_pass(tmp_path):
+    phases = []
+
+    def body(t):
+        phases.append(t.phase("1. connect", t.connect))
+        phases.append(t.phase("2. quiet", lambda: None, needs=phases[0]))
+
+    code, text = run_ticket(make(tmp_path), body)
+    assert code == 0
+    assert [p.status for p in phases] == ["PASS", "PASS"]
+    assert "2 passed, 0 failed, 0 skipped" in text
+
+
+def test_failed_need_blocks_with_reason_and_propagates(tmp_path):
+    ran = []
+    phases = {}
+
+    def body(t):
+        phases["pre"] = t.phase("2. preflight", boom)
+        phases["base"] = t.phase("3. baseline", lambda: ran.append(1), needs=phases["pre"])
+        phases["next"] = t.phase("4. next", lambda: ran.append(2), needs=[phases["base"]])
+
+    code, text = run_ticket(make(tmp_path), body)
+    assert code == 1
+    assert ran == []
+    assert phases["pre"].status == "FAIL"
+    assert phases["base"].reason == "needs 2. preflight (failed)"
+    assert phases["next"].reason == "needs 3. baseline (skipped)"
+    assert "needs 2. preflight (failed)" in text
+    assert "needs 3. baseline (skipped)" in text
+
+
+def test_reason_names_every_blocker(tmp_path):
+    phases = {}
+
+    def body(t):
+        a = t.phase("a", boom)
+        b = t.phase("b", boom)
+        phases["c"] = t.phase("c", lambda: None, needs=[a, b])
+
+    run_ticket(make(tmp_path), body)
+    assert phases["c"].reason == "needs a (failed), b (failed)"
+
+
+def test_deliberate_skip_does_not_block(tmp_path):
+    phases = {}
+
+    def body(t):
+        phases["skip"] = t.phase("1b. deploy", boom, skip="no --deploy")
+        phases["next"] = t.phase("2. pre", lambda: None, needs=phases["skip"])
+
+    code, text = run_ticket(make(tmp_path), body)
+    assert code == 0
+    assert phases["skip"].status == "SKIP"
+    assert phases["skip"].reason == "no --deploy"
+    assert phases["next"].status == "PASS"
+    assert "no --deploy" in text
+
+
+# -- cleanup ----------------------------------------------------------------------
+
+def test_cleanup_runs_after_failed_phase_in_reverse_and_failure_does_not_mask(tmp_path):
+    order = []
+
+    def bad():
+        order.append("bad")
+        raise RuntimeError("cleanup broke")
+
+    def body(t):
+        t.cleanup(lambda: order.append("first"))
+        t.cleanup(bad)
+        t.phase("1. connect", t.connect)
+        t.phase("2. fails", boom)
+
+    code, text = run_ticket(make(tmp_path), body)
+    assert code == 1
+    assert order == ["bad", "first"]
+    assert "FAIL  cleanup 2" in text
+    assert "PASS  cleanup 1" in text
+    assert "cleanup broke" in text
+
+
+def test_single_cleanup_is_named_cleanup(tmp_path):
+    def body(t):
+        t.cleanup(lambda: None)
+        t.phase("1. connect", t.connect)
+
+    _, text = run_ticket(make(tmp_path), body)
+    assert "PASS  cleanup " in text
+    assert "cleanup 1" not in text
+
+
+def test_cleanup_runs_on_keyboard_interrupt_and_exit_is_nonzero(tmp_path):
+    ran = []
+
+    def body(t):
+        t.cleanup(lambda: ran.append("cleanup"))
+        t.phase("1. connect", t.connect)
+        raise KeyboardInterrupt
+
+    code, text = run_ticket(make(tmp_path), body)
+    assert code == 1
+    assert ran == ["cleanup"]
+    assert "FAIL  interrupted: KeyboardInterrupt" in text
+    assert "Traceback" in text
+
+
+def test_exception_in_block_is_recorded(tmp_path):
+    def body(t):
+        t.phase("1. connect", t.connect)
+        raise ValueError("escaped")
+
+    code, text = run_ticket(make(tmp_path), body)
+    assert code == 1
+    assert "interrupted: ValueError" in text
+    assert "escaped" in text
+
+
+def test_cleanup_skipped_when_not_connected(tmp_path):
+    ran = []
+
+    def body(t):
+        t.cleanup(lambda: ran.append(1))
+        t.phase("1. connect", t.connect)
+
+    code, text = run_ticket(make(tmp_path, host=None), body)
+    assert code == 1
+    assert ran == []
+    assert "SKIP  cleanup" in text
+    assert "not connected" in text
+
+
+# -- summary ----------------------------------------------------------------------
+
+def test_summary_has_host_dominion_warning_and_note_lines(tmp_path):
+    def body(t):
+        t.phase("1. connect", t.connect)
+        t.warn("careful")
+        t.note("fyi")
+
+    _, text = run_ticket(make(tmp_path), body)
+    lines = text.splitlines()
+    assert "host: vm-1" in lines
+    assert any(line.startswith("dominion ") and ticket_mod.PACKAGE_DIR in line for line in lines)
+    assert "WARNING: careful" in lines
+    assert "NOTE: fyi" in lines
+    assert "Target: vm-1 (10.0.0.9)" in lines
+
+
+def test_connect_failed_still_writes_summary_and_junit(tmp_path):
+    def body(t):
+        t.phase("1. connect", t.connect)
+
+    t = make(tmp_path, host="")
+    code, text = run_ticket(t, body)
+    assert code == 1
+    assert "Target: (none)" in text
+    assert "host: (none)" in text
+    assert "FAIL  1. connect" in text
+    assert "no host given" in text
+    assert os.path.isfile(os.path.join(t.output_dir, "junit.xml"))
+
+
+def test_connect_sets_wapi_version_and_config(tmp_path):
+    t = make(tmp_path, worktree="/wt", wapi_version="v2.15")
+    with pytest.raises(SystemExit), t:
+        t.phase("1. connect", t.connect)
+        assert t.app.wapi_version == "v2.15"
+        assert t.app.cfg.ip == "10.0.0.9"
+        assert t.app.cfg.worktree == "/wt"
+        assert t.app.cfg.output_dir == t.output_dir
+        assert t.container is t.app.container
+
+
+def test_app_property_error_when_not_connected(tmp_path):
+    t = make(tmp_path)
+    with pytest.raises(RuntimeError, match="appliance not connected"):
+        t.app
+    with pytest.raises(RuntimeError, match="appliance not connected"):
+        t.container
+
+
+def test_write_dumps_json(tmp_path):
+    t = make(tmp_path)
+    with pytest.raises(SystemExit), t:
+        path = t.write("x.json", {"a": 1})
+    assert path == os.path.join(t.output_dir, "x.json")
+    with open(path) as f:
+        assert '"a": 1' in f.read()
+
+
+# -- run.log and stream restore ---------------------------------------------------
+
+def test_run_log_gets_stdout_and_logger_output_and_streams_restored(tmp_path, capsys):
+    out, err = sys.stdout, sys.stderr
+    lg = create_logger("dominion.test_ticket_log")
+    t = make(tmp_path)
+    with pytest.raises(SystemExit), t:
+        assert sys.stdout is not out
+        print("hello stdout")
+        lg.info("hello logger")
+        t.phase("1. connect", t.connect)
+    assert sys.stdout is out
+    assert sys.stderr is err
+    assert all(h.stream is err for h in lg.handlers)
+    with open(os.path.join(t.output_dir, "run.log")) as f:
+        log_text = f.read()
+    assert "hello stdout" in log_text
+    assert "hello logger" in log_text
+    assert "TEST: 1. connect" in log_text
+    assert "RESULTS: 1 passed" in log_text
+    assert "host: vm-1" in capsys.readouterr().out
+
+
+# -- Run compatibility ------------------------------------------------------------
+
+def test_run_summary_without_target_still_raises_type_error(tmp_path):
+    with pytest.raises(TypeError):
+        Run(output_dir=str(tmp_path)).summary()
+
+
+def test_run_summary_extra_lines(tmp_path):
+    run = Run(output_dir=str(tmp_path))
+    run.add(FakeApp(type("C", (), {"hostname": "h", "ip": "1.1.1.1"})()))
+    run.test("x", lambda: None)
+    with pytest.raises(SystemExit) as exc:
+        run.summary(extra=["EXTRA: one"])
+    assert exc.value.code == 0
+    with open(os.path.join(run.output_dir, "summary.txt")) as f:
+        assert f.read().rstrip().endswith("EXTRA: one")
+
+
+# -- Checks -----------------------------------------------------------------------
+
+def test_checks_raises_listing_all_failures():
+    with pytest.raises(AssertionError) as exc, Checks("baseline") as c:
+        c.expect(True, "fine")
+        c.expect(False, "one")
+        c.expect(False, "two")
+    assert str(exc.value) == "baseline:\n  one\n  two"
+
+
+def test_checks_passes_when_all_ok():
+    with Checks("x") as c:
+        c.expect(True, "fine")
+
+
+def test_checks_does_not_mask_in_flight_exception():
+    with pytest.raises(KeyError), Checks("x") as c:
+        c.expect(False, "one")
+        raise KeyError("real")

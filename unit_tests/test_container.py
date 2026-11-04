@@ -546,3 +546,30 @@ def test_count_infoblox_log_delegates(fake_transport_factory):
         logger=LOGGER,
     )
     assert c.count_infoblox_log("token") == 12
+
+
+# -- sh() -------------------------------------------------------------------------
+
+def test_sh_wraps_command_in_quoted_sh_c(fake_transport):
+    c = NiosContainer(
+        container_name="nios", transport=fake_transport,
+        chroot=DEFAULT_CHROOT, logger=LOGGER,
+    )
+    fake_transport.responses["echo"] = (0, "it's\n", "")
+    assert c.sh("echo 'it'\"'\"'s' | wc -l") == (0, "it's\n", "")
+    assert fake_transport.calls[-1] == (
+        "run", "sh -c 'echo '\"'\"'it'\"'\"'\"'\"'\"'\"'\"'\"'s'\"'\"' | wc -l'",
+    )
+
+
+def test_sh_check_flag_is_passed_through(fake_transport):
+    from dominion import CommandError
+
+    c = NiosContainer(
+        container_name="nios", transport=fake_transport,
+        chroot=DEFAULT_CHROOT, logger=LOGGER,
+    )
+    fake_transport.responses["false"] = (1, "", "boom")
+    assert c.sh("false", check=False) == (1, "", "boom")
+    with pytest.raises(CommandError):
+        c.sh("false")
