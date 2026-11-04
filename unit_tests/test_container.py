@@ -573,3 +573,32 @@ def test_sh_check_flag_is_passed_through(fake_transport):
     assert c.sh("false", check=False) == (1, "", "boom")
     with pytest.raises(CommandError):
         c.sh("false")
+
+
+def test_sh_hook_records_success_and_command_error(fake_transport):
+    from dominion import CommandError
+
+    c = NiosContainer(
+        container_name="nios", transport=fake_transport,
+        chroot=DEFAULT_CHROOT, logger=LOGGER,
+    )
+    records = []
+    c.on_call = records.append
+    fake_transport.responses["ok"] = (0, "fine\n", "w")
+    fake_transport.responses["bad"] = (3, "partial", "nope")
+    c.sh("ok")
+    with pytest.raises(CommandError):
+        c.sh("bad")
+    assert records == [
+        {"kind": "sh", "cmd": "ok", "rc": 0, "stdout": "fine\n", "stderr": "w"},
+        {"kind": "sh", "cmd": "bad", "rc": 3, "stdout": "partial", "stderr": "nope"},
+    ]
+
+
+def test_sh_without_hook_records_nothing(fake_transport):
+    c = NiosContainer(
+        container_name="nios", transport=fake_transport,
+        chroot=DEFAULT_CHROOT, logger=LOGGER,
+    )
+    assert c.on_call is None
+    assert c.sh("ok") == (0, "", "")

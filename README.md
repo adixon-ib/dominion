@@ -142,6 +142,31 @@ run.summary(app)
 ```
 
 
+### Ticket tests
+
+Ticket tests use `Ticket` instead of wiring `Run` by hand. It tees stdout/stderr/logs into `run.log`, connects, gates phases on prerequisites, always runs cleanups, and writes `report.md` (per phase: preconditions, every WAPI and shell call with full responses, checks with expected vs got, errors), `summary.txt` and `junit.xml`. Leaving the block exits 1 on any failure, else 0.
+
+```python
+from dominion import Ticket
+
+t = Ticket("NIOS-111642", HOST, results_dir=RESULTS_DIR, worktree=WORKTREE, wapi_version="v2.15")
+with t:
+    t.cleanup(lambda: final_cleanup(t))
+    connect = t.phase("1. connect", t.connect)
+    dep = t.phase("1b. deploy", lambda: deploy(t), needs=connect,
+                  skip=None if args.deploy else "no --deploy")
+    pre = t.phase("2. preflight", lambda: preflight(t), needs=[connect, dep])
+    t.phase("6. member latch", lambda: member_latch(t), needs=pre,
+            pre=[("archive backed up", lambda: t.container.sh(f"test -f {BACKUP}", check=False)[0] == 0)])
+
+def member_latch(t):
+    rows = t.app.wapi.get("ipc:overage", params="_return_fields=upsize_status")
+    with t.checks("member latch") as c:
+        c.expect("upsize_status", "OVERAGE_UPSIZE", rows[0]["upsize_status"])
+```
+
+A phase is skipped (and its dependants with it) when a `needs` phase failed or was skipped, or a `pre` precondition is unmet. A `skip=` reason is a deliberate skip and does not block dependants. Use `t.container.sh(cmd)` for shell commands in the NIOS container.
+
 ### Results
 
 dominion is designed to log every command ran on the appliance. Below is sample output from a run:

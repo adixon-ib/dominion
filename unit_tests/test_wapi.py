@@ -232,3 +232,50 @@ class TestUploadFile:
         with pytest.raises(RuntimeError):
             client.upload_file(str(f))
         assert t.calls[-1].startswith("rm -f /tmp/dominion_upload_")
+
+
+class TestOnCall:
+
+    def _client(self, stdout, records, **kw):
+        client = WapiClient(transport=FakeTransport(stdout=stdout), **kw)
+        client.on_call = records.append
+        return client
+
+    def test_record_has_path_query_status_and_full_body(self):
+        records = []
+        c = self._client(_make_response([{"a": 1}]), records, version="v2.15")
+        c.get("ipc:overage", params="_return_fields=a")
+        assert records == [{
+            "kind": "wapi", "method": "GET",
+            "path": "/wapi/v2.15/ipc:overage?_return_fields=a",
+            "body": None, "status": 200, "response": '[{"a": 1}]',
+        }]
+
+    def test_request_body_recorded_and_no_credentials(self):
+        records = []
+        c = self._client(_make_response({}, 201), records, password="s3cret")
+        c.post("record:a", {"name": "x"})
+        assert records[0]["body"] == {"name": "x"}
+        assert "s3cret" not in str(records)
+        assert "admin" not in str(records)
+
+    def test_recorded_before_wapi_error_with_untruncated_body(self):
+        records = []
+        html = "<html>" + "x" * 500
+        c = self._client(f"{html}\n{_STATUS_MARKER}502", records)
+        with pytest.raises(WapiError) as exc:
+            c.get("grid")
+        assert len(exc.value.body) == 200
+        assert records[0]["status"] == 502
+        assert records[0]["response"] == html
+
+    def test_recorded_before_json_decode_error(self):
+        records = []
+        c = self._client(f"not json\n{_STATUS_MARKER}200", records)
+        with pytest.raises(json.JSONDecodeError):
+            c.get("grid")
+        assert records[0]["response"] == "not json"
+
+    def test_no_hook_changes_nothing(self):
+        c = WapiClient(transport=FakeTransport(stdout=_make_response([1])))
+        assert c.get("grid") == [1]

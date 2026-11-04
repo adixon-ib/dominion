@@ -509,3 +509,22 @@ def test_lab_network_raises_on_missing_fields(monkeypatch):
 def test_reset_all_keeps_private_alias():
     from dominion.actions import appliance_reset_all as mod
     assert mod._get_lab_network is appliance_mod.lab_network
+
+
+# -- on_call hook -----------------------------------------------------------------
+
+def test_on_call_reaches_container_and_survives_wapi_change(ssh_always_reachable):
+    app = Appliance.from_config(
+        ApplianceConfig(hostname=DEFAULT_HOSTNAME, ip=DEFAULT_IP),
+    )
+    assert app.on_call is None
+    assert app.wapi.on_call is None
+
+    def hook(record):
+        pass
+
+    app.on_call = hook
+    assert app.container.on_call is hook
+    assert app.wapi.on_call is hook
+    app.wapi_version = "v2.15"
+    assert app.wapi.on_call is hook

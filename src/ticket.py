@@ -5,9 +5,10 @@
         connect = t.phase("1. connect", t.connect)
         t.phase("2. check", lambda: check(t), needs=connect)
 
-Writes run.log (stdout, stderr and logger output), summary.txt and junit.xml
-under a timestamped directory, and exits the process on leaving the block:
-1 if any phase, cleanup or the block itself failed, else 0.
+Writes run.log (stdout, stderr and logger output), report.md (per phase:
+preconditions, WAPI and shell calls, checks, errors), summary.txt and
+junit.xml under a timestamped directory, and exits the process on leaving the
+block: 1 if any phase, cleanup or the block itself failed, else 0.
 """
 
 from __future__ import annotations
@@ -15,6 +16,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import subprocess
 import sys
 from collections.abc import Callable, Iterable
@@ -25,6 +27,7 @@ from .config import ApplianceConfig
 from .constants import WAPI_VERSION
 from .container import NiosContainer
 from .harness import Run
+from .log import create_logger
 
 PACKAGE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -76,17 +79,30 @@ class Phase:
     blocked: bool = False  # SKIP caused by a prerequisite, as opposed to deliberate
 
 
-class Checks:
-    """Collect every failed expectation in a block, then raise once."""
+def _fmt(v) -> str:
+    return v if isinstance(v, str) else repr(v)
 
-    def __init__(self, what: str):
+
+class Checks:
+    """Record every expectation in a block, then raise once listing failures.
+    Get one from Ticket.checks() so the expectations land in the report."""
+
+    def __init__(self, what: str, sink: list | None = None):
         self.what = what
         self.failures: list[str] = []
+        self._sink = sink
 
-    def expect(self, ok, message) -> None:
+    def expect(self, label: str, expected, got, ok: bool | None = None) -> None:
+        if ok is None:
+            ok = expected == got
+        if self._sink is not None:
+            self._sink.append(
+                {"label": label, "expected": expected, "got": got, "ok": ok}
+            )
         if not ok:
-            log.error("CHECK FAILED: %s", message)
-            self.failures.append(message)
+            msg = f"{label}: expected {_fmt(expected)}, got {_fmt(got)}"
+            log.error("CHECK FAILED: %s", msg)
+            self.failures.append(msg)
 
     def __enter__(self):
         return self
@@ -97,6 +113,43 @@ class Checks:
                 f"{self.what}:\n  " + "\n  ".join(self.failures)
             )
         return False
+
+
+def _fence(text: str, lang: str = "") -> str:
+    ticks = "`" * max(3, max(map(len, re.findall("`+", text)), default=0) + 1)
+    return f"{ticks}{lang}\n{text.rstrip(chr(10))}\n{ticks}"
+
+
+def _json_or_text(text: str) -> str:
+    try:
+        return _fence(json.dumps(json.loads(text), indent=2), "json")
+    except ValueError:
+        return _fence(text)
+
+
+def _render_call(c: dict) -> list[str]:
+    if c["kind"] == "wapi":
+        out = [f"{c['method']} {c['path']}  -> {c['status']}"]
+        if c["body"] is not None:
+            out += ["Request body", _fence(json.dumps(c["body"], indent=2), "json")]
+        if c["response"]:
+            out.append(_json_or_text(c["response"]))
+        return out
+    out = [f"$ {c['cmd']}  -> exit {c['rc']}"]
+    for key in ("stdout", "stderr"):
+        if c[key].strip():
+            out += [key, _fence(c[key])]
+    return out
+
+
+BUILD_RE = re.compile(r"Version\s*:\s*(\S+)")
+
+
+def _new_section(name: str, pre: list | None = None) -> dict:
+    return {
+        "name": name, "status": "SKIP", "duration": 0.0, "reason": "", "error": None,
+        "pre": pre if pre is not None else [], "calls": [], "checks": [],
+    }
 
 
 class Ticket:
@@ -113,15 +166,18 @@ class Ticket:
         self.host = host
         self.worktree = worktree
         self.wapi_version = wapi_version
+        self.build = "unknown"
         self.run = Run(output_dir=results_dir)
         self.output_dir = self.run.output_dir
         self._app: Appliance | None = None
         self._cleanups: list[Callable[[], object]] = []
         self._warnings: list[str] = []
         self._notes: list[str] = []
+        self._sections: list[dict] = []
+        self._current: dict | None = None
         self._saved: tuple | None = None
         self._logfile = None
-        self._log = logging.getLogger("dominion.ticket")
+        self._log = create_logger(name="dominion.ticket")
 
     @property
     def app(self) -> Appliance:
@@ -138,7 +194,7 @@ class Ticket:
     def connect(self) -> None:
         if not self.host:
             raise RuntimeError(
-                f"{self.name}: no host given (set the lab hostname, e.g. NIOS_TEST_HOST)"
+                f"{self.name}: no host given (lab hostname, e.g. NIOS_TEST_HOST)"
             )
         ip = lab_network(self.host)[0]
         app = Appliance.from_config(ApplianceConfig(
@@ -146,9 +202,52 @@ class Ticket:
             output_dir=self.output_dir,
         ))
         app.wapi_version = self.wapi_version
+        app.on_call = self._record_call
         self._app = app
         self.run.add(app)
         self._log.info("Connected %s (%s)", self.host, ip)
+        self._read_build()
+
+    def _record_call(self, record: dict) -> None:
+        if self._current is not None:
+            self._current["calls"].append(record)
+
+    def _read_build(self) -> None:
+        try:
+            with self.app.console_session() as console:
+                out = console.run("show version")
+            m = BUILD_RE.search(out)
+            if not m:
+                raise RuntimeError(f"no Version line in {out!r}")
+            self.build = m.group(1)
+        except Exception as e:
+            self.warn(f"build not read: {e}")
+
+    def checks(self, what: str) -> Checks:
+        sink = self._current["checks"] if self._current is not None else None
+        return Checks(what, sink)
+
+    def _skip(self, section: dict, reason: str, blocked: bool) -> Phase:
+        self.run.skip(section["name"], reason)
+        section["reason"] = reason
+        self._sections.append(section)
+        return Phase(section["name"], "SKIP", reason, blocked=blocked)
+
+    def _step(self, section: dict, fn: Callable[[], object]) -> str:
+        """Run fn as a recorded step, attributing app calls to section."""
+        self._current = section
+        try:
+            self.run.test(section["name"], fn)
+        except BaseException:
+            section.update(status="FAIL", error="interrupted, see the interrupted step")
+            self._sections.append(section)
+            raise
+        finally:
+            self._current = None
+        r = self.run._results[-1]
+        section.update(status=r["status"], duration=r["duration"], error=r["error"])
+        self._sections.append(section)
+        return r["status"]
 
     def phase(
         self,
@@ -156,23 +255,41 @@ class Ticket:
         fn: Callable[[], object],
         *,
         needs: Phase | Iterable[Phase] = (),
+        pre: Iterable[tuple[str, Callable[[], object]]] = (),
         skip: str | None = None,
     ) -> Phase:
+        section = _new_section(name)
         if skip:
-            self.run.skip(name, skip)
-            return Phase(name, "SKIP", skip)
+            return self._skip(section, skip, blocked=False)
         deps = [needs] if isinstance(needs, Phase) else list(needs)
-        blockers = [
-            f"{d.name} ({'failed' if d.status == 'FAIL' else 'skipped'})"
-            for d in deps
-            if d.status == "FAIL" or (d.status == "SKIP" and d.blocked)
-        ]
-        if blockers:
-            reason = "needs " + ", ".join(blockers)
-            self.run.skip(name, reason)
-            return Phase(name, "SKIP", reason, blocked=True)
-        self.run.test(name, fn)
-        return Phase(name, self.run._results[-1]["status"])
+        pre = list(pre)
+        unmet = []
+        for d in deps:
+            if d.status == "FAIL" or (d.status == "SKIP" and d.blocked):
+                state = "failed" if d.status == "FAIL" else "skipped"
+                unmet.append(f"{d.name} ({state})")
+                section["pre"].append((d.name, f"not met ({state})"))
+            else:
+                section["pre"].append((d.name, "met"))
+        if unmet:
+            section["pre"] += [(label, "not evaluated") for label, _ in pre]
+            return self._skip(section, "needs " + ", ".join(unmet), blocked=True)
+        not_met = []
+        self._current = section
+        try:
+            for label, check in pre:
+                try:
+                    ok, detail = bool(check()), ""
+                except Exception as e:
+                    ok, detail = False, f" ({type(e).__name__}: {e})"
+                section["pre"].append((label, "met" if ok else f"not met{detail}"))
+                if not ok:
+                    not_met.append(label)
+        finally:
+            self._current = None
+        if not_met:
+            return self._skip(section, "not met: " + ", ".join(not_met), blocked=True)
+        return Phase(name, self._step(section, fn))
 
     def cleanup(self, fn: Callable[[], object]) -> None:
         self._cleanups.append(fn)
@@ -208,11 +325,12 @@ class Ticket:
         old_out, old_err = self._saved
         try:
             if exc is not None:
-                self.run.test(
-                    f"interrupted: {exc_type.__name__}",
+                self._step(
+                    _new_section(f"interrupted: {exc_type.__name__}"),
                     lambda: self._raise_from(exc),
                 )
             self._run_cleanups()
+            self._write_report()
             self.run.summary(extra=self._extra(), _allow_no_target=True)
         finally:
             _rebind_log_handlers(sys.stderr, old_err)
@@ -222,11 +340,11 @@ class Ticket:
     def _run_cleanups(self) -> None:
         several = len(self._cleanups) > 1
         for n, fn in reversed(list(enumerate(self._cleanups, 1))):
-            name = f"cleanup {n}" if several else "cleanup"
+            section = _new_section(f"cleanup {n}" if several else "cleanup")
             if self._app is None:
-                self.run.skip(name, "not connected")
+                self._skip(section, "not connected", blocked=False)
             else:
-                self.run.test(name, fn)
+                self._step(section, fn)
 
     def _extra(self) -> list[str]:
         return [
@@ -235,3 +353,42 @@ class Ticket:
             *[f"WARNING: {w}" for w in self._warnings],
             *[f"NOTE: {n}" for n in self._notes],
         ]
+
+    def _write_report(self) -> None:
+        run = self.run
+        verdict = "FAIL" if run._failed else "PASS"
+        lines = [
+            f"# {self.name}",
+            "",
+            f"- Host: {self.host or '(none)'}",
+            f"- Build: {self.build}",
+            f"- Dominion: {_git_rev(PACKAGE_DIR)}",
+            f"- Verdict: {verdict} ({run._passed} passed, {run._failed} failed, "
+            f"{run._skipped} skipped)",
+        ]
+        for sec in self._sections:
+            dur = "" if sec["status"] == "SKIP" else f" ({sec['duration']:.1f}s)"
+            lines += ["", f"## {sec['name']}  {sec['status']}{dur}"]
+            if sec["reason"]:
+                lines += ["", f"Skipped: {sec['reason']}"]
+            if sec["pre"]:
+                lines += ["", "Preconditions"]
+                lines += [f"- {label}: {state}" for label, state in sec["pre"]]
+            if sec["calls"]:
+                lines += ["", "Calls"]
+                for call in sec["calls"]:
+                    lines += _render_call(call)
+            if sec["checks"]:
+                lines += ["", "Checks"]
+                lines += [
+                    f"- {c['label']}: expected {_fmt(c['expected'])}, "
+                    f"got {_fmt(c['got'])}  {'ok' if c['ok'] else 'FAIL'}"
+                    for c in sec["checks"]
+                ]
+            if sec["status"] == "FAIL" and sec["error"]:
+                lines += ["", "Error", _fence(sec["error"])]
+        for title, items in (("Warnings", self._warnings), ("Notes", self._notes)):
+            if items:
+                lines += ["", f"## {title}", *[f"- {i}" for i in items]]
+        with open(os.path.join(self.output_dir, "report.md"), "w") as f:
+            f.write("\n".join(lines) + "\n")

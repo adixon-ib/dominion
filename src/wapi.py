@@ -33,9 +33,13 @@ class WapiError(Exception):
 class WapiClient:
     """Thin wrapper around curl-based WAPI calls over a transport.
 
+    `on_call`, if set, receives a record dict for every request.
+
     All requests run inside the NIOS container (curl to localhost),
     so the transport must target a container with WAPI running.
     """
+
+    on_call = None
 
     def __init__(
         self,
@@ -75,6 +79,7 @@ class WapiClient:
         body, _, status_str = out.rpartition(_STATUS_MARKER)
         body = body.strip()
         status = int(status_str.strip()) if status_str.strip().isdigit() else 0
+        self._emit(method, url[len("https://localhost"):], data, status, body)
 
         try:
             parsed = json.loads(body) if body else None
@@ -89,6 +94,13 @@ class WapiClient:
             raise WapiError(method, path, status, body)
 
         return status, parsed
+
+    def _emit(self, method, path, data, status, response) -> None:
+        if self.on_call:
+            self.on_call({
+                "kind": "wapi", "method": method, "path": path,
+                "body": data, "status": status, "response": response,
+            })
 
     def get(self, path: str, params: str = "", check: bool = True) -> Any:
         _, parsed = self._request("GET", path, params=params, check=check)
@@ -143,6 +155,7 @@ class WapiClient:
             self._transport.run(f"rm -f {shlex.quote(remote)}", check=False)
         body, _, status_str = out.rpartition(_STATUS_MARKER)
         status = int(status_str.strip()) if status_str.strip().isdigit() else 0
+        self._emit("POST", urlsplit(url).path, None, status, body.strip())
         if status < 200 or status >= 300:
             raise WapiError("POST", urlsplit(url).path, status, body.strip())
         return token

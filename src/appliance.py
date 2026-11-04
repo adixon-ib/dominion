@@ -74,6 +74,7 @@ class _ApplianceBase:
         self._logger = logger
         self._wapi: WapiClient | None = None
         self._wapi_version: str = WAPI_VERSION
+        self._on_call = None
 
     @property
     def wapi(self) -> WapiClient:
@@ -83,7 +84,21 @@ class _ApplianceBase:
                 version=self._wapi_version,
                 logger=self._logger,
             )
+            self._wapi.on_call = self._on_call
         return self._wapi
+
+    @property
+    def on_call(self):
+        """Optional hook called with a record dict for every WAPI request and
+        container.sh() call. None (default) records nothing."""
+        return self._on_call
+
+    @on_call.setter
+    def on_call(self, fn) -> None:
+        self._on_call = fn
+        self.container.on_call = fn
+        if self._wapi is not None:
+            self._wapi.on_call = fn
 
     @property
     def wapi_version(self) -> str:

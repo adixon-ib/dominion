@@ -1,21 +1,52 @@
 """Unit tests for ticket.py: Ticket and Checks. No network, docker or lab tools."""
 
+import contextlib
+import json
 import os
+import re
 import sys
 
 import pytest
 
 import dominion.src.ticket as ticket_mod
-from dominion import Appliance, Checks, Ticket, create_logger
+from dominion import Appliance, Ticket, create_logger
 from dominion.src.harness import Run
 
 
+class FakeContainer:
+    def __init__(self, app):
+        self.app = app
+
+    def sh(self, cmd, check=True):
+        rec = {"kind": "sh", "cmd": cmd, "rc": 0, "stdout": "out\n", "stderr": ""}
+        if self.app.on_call:
+            self.app.on_call(rec)
+        return 0, "out\n", ""
+
+
+class FakeConsole:
+    def __init__(self, text):
+        self.text = text
+
+    def run(self, cmd):
+        if isinstance(self.text, Exception):
+            raise self.text
+        return self.text
+
+
 class FakeApp:
+    console_text = "Version : 9.0.7-12345\n"
+
     def __init__(self, cfg):
         self.cfg = cfg
         self.hostname = cfg.hostname
         self.wapi_version = None
-        self.container = object()
+        self.on_call = None
+        self.container = FakeContainer(self)
+
+    @contextlib.contextmanager
+    def console_session(self):
+        yield FakeConsole(self.console_text)
 
     def dump_infoblox_log(self, dest):
         with open(dest, "w") as f:
@@ -31,6 +62,11 @@ def fake_lab(monkeypatch):
     monkeypatch.setattr(
         Appliance, "from_config", classmethod(lambda cls, cfg: FakeApp(cfg)),
     )
+
+
+def read_report(t):
+    with open(os.path.join(t.output_dir, "report.md")) as f:
+        return f.read()
 
 
 def make(tmp_path, host="vm-1", **kw):
@@ -70,8 +106,12 @@ def test_failed_need_blocks_with_reason_and_propagates(tmp_path):
 
     def body(t):
         phases["pre"] = t.phase("2. preflight", boom)
-        phases["base"] = t.phase("3. baseline", lambda: ran.append(1), needs=phases["pre"])
-        phases["next"] = t.phase("4. next", lambda: ran.append(2), needs=[phases["base"]])
+        phases["base"] = t.phase(
+            "3. baseline", lambda: ran.append(1), needs=phases["pre"],
+        )
+        phases["next"] = t.phase(
+            "4. next", lambda: ran.append(2), needs=[phases["base"]],
+        )
 
     code, text = run_ticket(make(tmp_path), body)
     assert code == 1
@@ -194,7 +234,8 @@ def test_summary_has_host_dominion_warning_and_note_lines(tmp_path):
     _, text = run_ticket(make(tmp_path), body)
     lines = text.splitlines()
     assert "host: vm-1" in lines
-    assert any(line.startswith("dominion ") and ticket_mod.PACKAGE_DIR in line for line in lines)
+    prefix = f"dominion {ticket_mod.PACKAGE_DIR}: "
+    assert any(line.startswith(prefix) for line in lines)
     assert "WARNING: careful" in lines
     assert "NOTE: fyi" in lines
     assert "Target: vm-1 (10.0.0.9)" in lines
@@ -286,19 +327,204 @@ def test_run_summary_extra_lines(tmp_path):
 # -- Checks -----------------------------------------------------------------------
 
 def test_checks_raises_listing_all_failures():
-    with pytest.raises(AssertionError) as exc, Checks("baseline") as c:
-        c.expect(True, "fine")
-        c.expect(False, "one")
-        c.expect(False, "two")
-    assert str(exc.value) == "baseline:\n  one\n  two"
+    t = Ticket("x", "h")
+    with pytest.raises(AssertionError) as exc, t.checks("baseline") as c:
+        c.expect("a", 1, 1)
+        c.expect("b", "one", "uno")
+        c.expect("c", "QPS", [])
+    assert str(exc.value) == (
+        "baseline:\n  b: expected one, got uno\n  c: expected QPS, got []"
+    )
 
 
-def test_checks_passes_when_all_ok():
-    with Checks("x") as c:
-        c.expect(True, "fine")
+def test_checks_ok_flag_overrides_equality():
+    with Ticket("x", "h").checks("x") as c:
+        c.expect("range", "1..5", 3, ok=True)
 
 
 def test_checks_does_not_mask_in_flight_exception():
-    with pytest.raises(KeyError), Checks("x") as c:
-        c.expect(False, "one")
+    with pytest.raises(KeyError), Ticket("x", "h").checks("x") as c:
+        c.expect("a", 1, 2)
         raise KeyError("real")
+
+
+# -- report.md --------------------------------------------------------------------
+
+def test_report_structure_and_checks(tmp_path):
+    def member_latch(t):
+        t.container.sh("ls /var/lib/token_data")
+        with t.checks("latch") as c:
+            c.expect("upsize_status", "OVERAGE_UPSIZE", "OVERAGE_UPSIZE")
+            c.expect("capacity types", "QPS,LPS,Objects", [])
+
+    def body(t):
+        connect = t.phase("1. connect", t.connect)
+        t.phase("6. member latch", lambda: member_latch(t), needs=connect,
+                pre=[("archive backed up", lambda: True)])
+
+    t = make(tmp_path)
+    code, _ = run_ticket(t, body)
+    report = read_report(t)
+    print(report)
+    assert code == 1
+    head = report.split("\n## ")[0]
+    assert "# NIOS-1" in head
+    assert "- Host: vm-1" in head
+    assert "- Build: 9.0.7-12345" in head
+    assert "- Verdict: FAIL (1 passed, 1 failed, 0 skipped)" in head
+    assert re.search(r"## 6\. member latch  FAIL \(\d+\.\ds\)", report)
+    assert "Preconditions\n- 1. connect: met\n- archive backed up: met" in report
+    assert "$ ls /var/lib/token_data  -> exit 0" in report
+    assert "stdout\n```\nout\n```" in report
+    assert "- upsize_status: expected OVERAGE_UPSIZE, got OVERAGE_UPSIZE  ok" in report
+    assert "- capacity types: expected QPS,LPS,Objects, got []  FAIL" in report
+    assert "Error\n```\nTraceback" in report
+    assert "AssertionError: latch:" in report
+
+
+def test_unmet_pre_skips_blocks_dependants_and_names_label(tmp_path):
+    phases = {}
+    ran = []
+
+    def raises():
+        raise OSError("no ssh")
+
+    def body(t):
+        phases["a"] = t.phase(
+            "5. a", lambda: ran.append("a"),
+            pre=[("backed up", lambda: True), ("archive present", lambda: False),
+                 ("reachable", raises)],
+        )
+        phases["b"] = t.phase("6. b", lambda: ran.append("b"), needs=phases["a"])
+
+    t = make(tmp_path)
+    code, text = run_ticket(t, body)
+    report = read_report(t)
+    assert code == 0
+    assert ran == []
+    assert phases["a"].status == "SKIP"
+    assert phases["a"].blocked
+    assert phases["a"].reason == "not met: archive present, reachable"
+    assert phases["b"].reason == "needs 5. a (skipped)"
+    assert "not met: archive present, reachable" in text
+    assert "- backed up: met" in report
+    assert "- archive present: not met\n" in report
+    assert "- reachable: not met (OSError: no ssh)" in report
+    assert "## 5. a  SKIP" in report
+
+
+def test_unmet_need_leaves_pre_not_evaluated(tmp_path):
+    called = []
+    phases = {}
+
+    def body(t):
+        bad = t.phase("2. bad", boom)
+        phases["x"] = t.phase(
+            "3. x", lambda: None, needs=bad,
+            pre=[("thing", lambda: called.append(1) or True)],
+        )
+
+    t = make(tmp_path)
+    run_ticket(t, body)
+    report = read_report(t)
+    assert called == []
+    assert phases["x"].reason == "needs 2. bad (failed)"
+    assert "- 2. bad: not met (failed)\n- thing: not evaluated" in report
+
+
+def test_report_has_cleanup_and_interrupted_sections_and_warnings(tmp_path):
+    def body(t):
+        t.cleanup(lambda: t.container.sh("rm -f x"))
+        t.phase("1. connect", t.connect)
+        t.warn("watch out")
+        t.note("fyi")
+        raise KeyboardInterrupt
+
+    t = make(tmp_path)
+    run_ticket(t, body)
+    report = read_report(t)
+    assert "## interrupted: KeyboardInterrupt  FAIL" in report
+    assert "## cleanup  PASS" in report
+    assert "$ rm -f x  -> exit 0" in report
+    assert "## Warnings\n- watch out" in report
+    assert "## Notes\n- fyi" in report
+
+
+def test_report_written_when_not_connected(tmp_path):
+    t = make(tmp_path, host=None)
+    run_ticket(t, lambda t: t.phase("1. connect", t.connect))
+    report = read_report(t)
+    assert "- Host: (none)" in report
+    assert "- Build: unknown" in report
+    assert "## 1. connect  FAIL" in report
+
+
+def test_calls_outside_a_phase_are_dropped(tmp_path):
+    t = make(tmp_path)
+    with pytest.raises(SystemExit), t:
+        t.phase("1. connect", t.connect)
+        t.container.sh("outside")
+        t.phase("2. in", lambda: t.container.sh("inside"))
+    report = read_report(t)
+    assert "outside" not in report
+    assert "$ inside" in report
+
+
+def test_build_failure_only_warns(tmp_path, monkeypatch):
+    monkeypatch.setattr(FakeApp, "console_text", RuntimeError("console down"))
+    t = make(tmp_path)
+    code, text = run_ticket(t, lambda t: t.phase("1. connect", t.connect))
+    assert code == 0
+    assert t.build == "unknown"
+    assert "WARNING: build not read: console down" in text
+
+
+def test_build_without_version_line_warns(tmp_path, monkeypatch):
+    monkeypatch.setattr(FakeApp, "console_text", "nothing here")
+    t = make(tmp_path)
+    code, text = run_ticket(t, lambda t: t.phase("1. connect", t.connect))
+    assert code == 0
+    assert "WARNING: build not read: no Version line" in text
+
+
+def test_sample_report(tmp_path):
+    """Renders a full report, printed with -s."""
+    def member_latch(t):
+        t.container.sh("ls /var/lib/token_data")
+        with t.checks("latch") as c:
+            c.expect("upsize_status", "OVERAGE_UPSIZE", "OVERAGE_UPSIZE")
+            c.expect("capacity types", "QPS,LPS,Objects", [])
+
+    def body(t):
+        t.cleanup(lambda: t.container.sh("rm -f /tmp/x"))
+        connect = t.phase("1. connect", t.connect)
+        dep = t.phase("1b. deploy", boom, needs=connect, skip="no --deploy")
+        t.phase("6. member latch", lambda: member_latch(t), needs=[connect, dep],
+                pre=[("archive backed up", lambda: True)])
+        t.phase("7. grid", lambda: None, needs=connect,
+                pre=[("calculator running", lambda: False)])
+        t.warn("usage_percent is 0")
+
+    t = make(tmp_path)
+    run_ticket(t, body)
+    print(read_report(t))
+
+
+def test_render_wapi_call_pretty_prints_full_body():
+    rows = [{"type": "SERVERS", "n": i} for i in range(50)]
+    text = "\n".join(ticket_mod._render_call({
+        "kind": "wapi", "method": "GET",
+        "path": "/wapi/v2.15/ipc:overage?_return_fields=type",
+        "body": None, "status": 200, "response": json.dumps(rows),
+    }))
+    assert text.startswith("GET /wapi/v2.15/ipc:overage?_return_fields=type  -> 200")
+    assert "```json\n[\n  {\n    \"type\": \"SERVERS\"," in text
+    assert '"n": 49' in text
+
+
+def test_render_wapi_error_body_is_raw_text_in_fence():
+    text = "\n".join(ticket_mod._render_call({
+        "kind": "wapi", "method": "GET", "path": "/wapi/v2.15/x",
+        "body": None, "status": 0, "response": "",
+    }))
+    assert text == "GET /wapi/v2.15/x  -> 0"

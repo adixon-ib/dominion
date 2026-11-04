@@ -19,7 +19,7 @@ from .deploy import DeployMixin
 from .log import LogDump, LogMark, create_logger
 from .network import LocalNetworkMixin
 from .session import ShellSession, ConsoleSession
-from .transport import LocalDockerTransport
+from .transport import CommandError, LocalDockerTransport
 
 if TYPE_CHECKING:
     from .log import NiosLogger
@@ -35,6 +35,8 @@ class NiosContainer(DeployMixin):
     handing back a container. For NCC (no separate host identity), use
     LocalNiosContainer.from_config() directly.
     """
+
+    on_call = None  # optional hook, receives a record per sh() call
 
     def __init__(
         self,
@@ -99,7 +101,19 @@ class NiosContainer(DeployMixin):
 
     def sh(self, cmd: str, check: bool = True) -> tuple[int, str, str]:
         """Run a shell command line in the container: (exit code, stdout, stderr)."""
-        return self._transport.run(f"sh -c {shlex.quote(cmd)}", check=check)
+        try:
+            rc, out, err = self._transport.run(f"sh -c {shlex.quote(cmd)}", check=check)
+        except CommandError as e:
+            self._emit_sh(cmd, e.exit_code, e.stdout, e.stderr)
+            raise
+        self._emit_sh(cmd, rc, out, err)
+        return rc, out, err
+
+    def _emit_sh(self, cmd, rc, out, err) -> None:
+        if self.on_call:
+            self.on_call({
+                "kind": "sh", "cmd": cmd, "rc": rc, "stdout": out, "stderr": err,
+            })
 
     def _wait_for_wapi(self, timeout: int = NIOS_WAPI_READY_TIMEOUT) -> None:
         deadline = time.time() + timeout
