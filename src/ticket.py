@@ -122,25 +122,44 @@ def _fence(text: str, lang: str = "") -> str:
     return f"{ticks}{lang}\n{text.rstrip(chr(10))}\n{ticks}"
 
 
-def _json_or_text(text: str) -> str:
+def _compact(text: str) -> str:
+    """One line per list element, or one line for anything else. Not JSON: as is."""
+    def dump(v):
+        return json.dumps(v, separators=(", ", ": "), sort_keys=True)
+
     try:
-        return _fence(json.dumps(json.loads(text), indent=2), "json")
+        v = json.loads(text)
     except ValueError:
         return _fence(text)
+    return _fence("\n".join(dump(el) for el in v) if v and isinstance(v, list)
+                  else dump(v))
 
 
-def _render_call(c: dict) -> list[str]:
+def _collapse(calls: list[dict]) -> list[tuple[dict, int]]:
+    """Merge consecutive calls with the same command, keeping the last."""
+    out: list[tuple[dict, int]] = []
+    for c in calls:
+        key = (c["kind"], c.get("method"), c.get("path"), c.get("cmd"))
+        if out and out[-1][2] == key:
+            out[-1] = (c, out[-1][1] + 1, key)
+        else:
+            out.append((c, 1, key))
+    return [(c, n) for c, n, _ in out]
+
+
+def _render_call(c: dict, n: int = 1) -> list[str]:
+    times = f"  (x{n}, last shown)" if n > 1 else ""
     if c["kind"] == "wapi":
-        out = [f"{c['method']} {c['path']}  -> {c['status']}"]
+        out = [f"{c['method']} {c['path']}  -> {c['status']}{times}"]
         if c["body"] is not None:
-            out += ["Request body", _fence(json.dumps(c["body"], indent=2), "json")]
+            out += ["Request body", _compact(json.dumps(c["body"]))]
         if c["response"]:
-            out.append(_json_or_text(c["response"]))
+            out.append(_compact(c["response"]))
         return out
-    out = [f"$ {c['cmd']}  -> exit {c['rc']}"]
+    out = [f"$ {c['cmd']}  -> exit {c['rc']}{times}"]
     for key in ("stdout", "stderr"):
         if c[key].strip():
-            out += [key, _fence(c[key])]
+            out += [key, _compact(c[key]) if key == "stdout" else _fence(c[key])]
     return out
 
 
@@ -274,8 +293,6 @@ class Ticket:
                 state = "failed" if d.status == "FAIL" else "skipped"
                 unmet.append(f"{d.name} ({state})")
                 section["pre"].append((d.name, f"not met ({state})"))
-            else:
-                section["pre"].append((d.name, "met"))
         if unmet:
             section["pre"] += [(label, "not evaluated") for label, _ in pre]
             return self._skip(section, "needs " + ", ".join(unmet), blocked=True)
@@ -406,10 +423,6 @@ class Ticket:
             if sec["pre"]:
                 lines += ["", "Preconditions"]
                 lines += [f"- {label}: {state}" for label, state in sec["pre"]]
-            if sec["calls"]:
-                lines += ["", "Calls"]
-                for call in sec["calls"]:
-                    lines += _render_call(call)
             if sec["checks"]:
                 lines += ["", "Checks"]
                 lines += [
@@ -419,6 +432,10 @@ class Ticket:
                 ]
             if sec["status"] == "FAIL" and sec["error"]:
                 lines += ["", "Error", _fence(sec["error"])]
+            if sec["calls"]:
+                lines += ["", "Calls"]
+                for call, n in _collapse(sec["calls"]):
+                    lines += _render_call(call, n)
         for title, items in (("Warnings", self._warnings), ("Notes", self._notes)):
             if items:
                 lines += ["", f"## {title}", *[f"- {i}" for i in items]]

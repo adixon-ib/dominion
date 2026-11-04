@@ -373,7 +373,8 @@ def test_report_structure_and_checks(tmp_path):
     assert "- Build: 9.0.7-12345" in head
     assert "- Verdict: FAIL (1 passed, 1 failed, 0 skipped)" in head
     assert re.search(r"## 6\. member latch  FAIL \(\d+\.\ds\)", report)
-    assert "Preconditions\n- 1. connect: met\n- archive backed up: met" in report
+    assert "Preconditions\n- archive backed up: met" in report
+    assert "1. connect: met" not in report
     assert "$ ls /var/lib/token_data  -> exit 0" in report
     assert "stdout\n```\nout\n```" in report
     assert "- upsize_status: expected OVERAGE_UPSIZE, got OVERAGE_UPSIZE  ok" in report
@@ -602,24 +603,125 @@ def test_sample_report(tmp_path):
     print(read_report(t))
 
 
-def test_render_wapi_call_pretty_prints_full_body():
-    rows = [{"type": "SERVERS", "n": i} for i in range(50)]
+def test_wapi_list_renders_one_compact_line_per_element():
+    rows = [{"type": "SERVERS", "b": [1, 2], "a": {"z": 1}}, {"type": "X"}]
     text = "\n".join(ticket_mod._render_call({
         "kind": "wapi", "method": "GET",
         "path": "/wapi/v2.15/ipc:overage?_return_fields=type",
         "body": None, "status": 200, "response": json.dumps(rows),
     }))
-    assert text.startswith("GET /wapi/v2.15/ipc:overage?_return_fields=type  -> 200")
-    assert "```json\n[\n  {\n    \"type\": \"SERVERS\"," in text
-    assert '"n": 49' in text
+    assert text == (
+        "GET /wapi/v2.15/ipc:overage?_return_fields=type  -> 200\n"
+        "```\n"
+        '{"a": {"z": 1}, "b": [1, 2], "type": "SERVERS"}\n'
+        '{"type": "X"}\n'
+        "```"
+    )
 
 
-def test_render_wapi_error_body_is_raw_text_in_fence():
+def test_wapi_dict_and_request_body_are_one_compact_line():
+    text = "\n".join(ticket_mod._render_call({
+        "kind": "wapi", "method": "PUT", "path": "/wapi/v2.15/x",
+        "body": {"b": 1, "a": [1, 2]}, "status": 200, "response": '{"y": 1,\n "x": 2}',
+    }))
+    assert 'Request body\n```\n{"a": [1, 2], "b": 1}\n```' in text
+    assert '```\n{"x": 2, "y": 1}\n```' in text
+
+
+def test_json_stdout_compacted_and_other_stdout_as_is():
+    def render(out):
+        return "\n".join(ticket_mod._render_call({
+            "kind": "sh", "cmd": "c", "rc": 0, "stdout": out, "stderr": "",
+        }))
+
+    assert render('{"b": 1,\n "a": 2}\n').endswith('```\n{"a": 2, "b": 1}\n```')
+    assert render("3\n").endswith("```\n3\n```")
+    assert render("a\nb c\n").endswith("```\na\nb c\n```")
+
+
+def test_wapi_empty_body_and_no_response():
     text = "\n".join(ticket_mod._render_call({
         "kind": "wapi", "method": "GET", "path": "/wapi/v2.15/x",
         "body": None, "status": 0, "response": "",
     }))
     assert text == "GET /wapi/v2.15/x  -> 0"
+
+
+def _sh(cmd, out="", rc=0):
+    return {"kind": "sh", "cmd": cmd, "rc": rc, "stdout": out, "stderr": ""}
+
+
+def _wapi(path, status=200, response=""):
+    return {"kind": "wapi", "method": "GET", "path": path, "body": None,
+            "status": status, "response": response}
+
+
+def test_collapse_merges_consecutive_only_and_keeps_last():
+    calls = [_sh("snap", "1"), _sh("snap", "2"), _sh("other"), _sh("snap", "3")]
+    got = ticket_mod._collapse(calls)
+    assert [(c["cmd"], n) for c, n in got] == [("snap", 2), ("other", 1), ("snap", 1)]
+    assert got[0][0]["stdout"] == "2"
+
+
+def test_collapse_wapi_by_method_path_and_query():
+    calls = [_wapi("/a?x=1", 500), _wapi("/a?x=1", 200), _wapi("/a?x=2")]
+    got = ticket_mod._collapse(calls)
+    assert [(c["path"], c["status"], n) for c, n in got] == [
+        ("/a?x=1", 200, 2), ("/a?x=2", 200, 1),
+    ]
+
+
+def test_render_collapsed_header_shows_count_and_last_result():
+    text = "\n".join(ticket_mod._render_call(_sh("snap", "9", rc=1), 7))
+    assert text.startswith("$ snap  -> exit 1  (x7, last shown)")
+    assert "```\n9\n```" in text
+
+
+def test_met_needs_hidden_and_unmet_need_shown(tmp_path):
+    def body(t):
+        ok = t.phase("1. ok", lambda: None)
+        bad = t.phase("2. bad", boom)
+        t.phase("3. fine", lambda: None, needs=ok)
+        t.phase("4. blocked", lambda: None, needs=[ok, bad])
+
+    t = make(tmp_path)
+    run_ticket(t, body)
+    report = read_report(t)
+    fine = report.split("## 3. fine")[1].split("\n## ")[0]
+    assert "Preconditions" not in fine
+    blocked = report.split("## 4. blocked")[1].split("\n## ")[0]
+    assert "Preconditions\n- 2. bad: not met (failed)" in blocked
+    assert "1. ok" not in blocked
+
+
+def test_section_order_and_phase6_shape(tmp_path):
+    rows = [{"type": f"T{i}", "n": i} for i in range(4)]
+    t = make(tmp_path)
+
+    def phase6():
+        t.container.sh("test -f backup")
+        for _ in range(7):
+            t.container.sh("helper snapshot", check=False)
+        path = "/wapi/v2.15/ipc:overage?f=type"
+        t.app.on_call(_wapi(path, 200, json.dumps(rows)))
+        with t.checks("latch") as c:
+            c.expect("upsize_status", "OVERAGE_UPSIZE", "OVERAGE_UPSIZE")
+            c.expect("capacity types", "QPS,LPS,Objects", [])
+
+    with pytest.raises(SystemExit), t:
+        connect = t.phase("1. connect", t.connect)
+        t.phase("6. member latch", phase6, needs=connect,
+                pre=[("archive backed up", lambda: True)])
+    report = read_report(t)
+    sec = "## 6. member latch" + report.split("## 6. member latch")[1].split("\n## ")[0]
+    print(sec)
+    heads = [sec.index(h) for h in ("Preconditions", "Checks", "Error", "Calls")]
+    assert heads == sorted(heads)
+    assert "$ helper snapshot  -> exit 0  (x7, last shown)" in sec
+    assert "$ test -f backup  -> exit 0\n" in sec
+    assert '{"n": 3, "type": "T3"}' in sec
+    max_lines = 45
+    assert len(sec.splitlines()) < max_lines
 
 
 def test_unmet_pre_alone_exits_one_with_skip_line(tmp_path):
