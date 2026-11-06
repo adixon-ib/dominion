@@ -412,7 +412,8 @@ class DeployMixin:
         mk/Makefile.common installs to INSTALL_TESTS_PYLIB_DIR =
         /infoblox/tests/lib/python/infoblox/test/$(PY_TEST_SUBDIR). The
         directory's Makefile sets PY_TEST_SUBDIR (wapi/test: one/wapi), else
-        products/one/mk/Makefile.include gives `one`.
+        products/one/mk/Makefile.include gives `one`. Only a plain `PY_TEST_SUBDIR =`
+        line is read: `?=`, `+=`, variables and conditionals are not handled.
         """
         if not subpath.startswith(TEST_PRODUCT_PREFIX):
             raise DeployError(

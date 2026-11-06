@@ -8,11 +8,14 @@ No docker, no network.
 import contextlib
 import logging
 import os
+import subprocess
 import types
 
 import pytest
 
-import dominion.src.ticket as ticket_mod
+import dominion.src.appliance as appliance_mod
+import dominion.src.container as container_mod
+import dominion.src.transport as transport_mod
 from dominion import (
     Checks,
     DeployError,
@@ -22,9 +25,29 @@ from dominion import (
     Ticket,
 )
 from dominion.src import py_tests
+from dominion.src.constants import NIOS_WAPI_POLL_INTERVAL
 from dominion.src.py_tests import PyTest, PyTestResult
 
 LOGGER = logging.getLogger("dominion.unit_test")
+
+
+@pytest.fixture(autouse=True)
+def no_sleep(monkeypatch):
+    """wait_ready sleeps between WAPI retries: record instead of waiting."""
+    sleeps = []
+    monkeypatch.setattr(container_mod.time, "sleep", sleeps.append)
+    return sleeps
+
+
+@pytest.fixture(autouse=True)
+def no_real_processes(monkeypatch):
+    """Nothing in this module may reach docker, ssh or a container."""
+    def refuse(*a, **kw):
+        raise AssertionError(f"real process spawned: {a}")
+
+    monkeypatch.setattr(transport_mod, "subprocess", types.SimpleNamespace(
+        run=refuse, TimeoutExpired=subprocess.TimeoutExpired))
+
 CLS = "infoblox.test.one.wapi.test_token_bundle.WapiIpcBundle215"
 HEAD = """\
 Restoring network settings for loopback interface
@@ -128,6 +151,45 @@ Ran 1 test in 0.1s
 
 FAILED (failures=1)
 """
+# 2026-10-22 schema.log: every test passed, but -N was given twice, so the second
+# -N became a test name. rc 0.
+DOUBLE_N = """\
+#-N: Not a test module, class or test
+Restoring network settings for loopback interface
+======================================================================
+infoblox.test.admin_conn.test_wapi.TestWapiSchema
+1 of 2
+test_max_field_length (infoblox.test.admin_conn.test_wapi.TestWapiSchema) ... ok
+test_out_of_sync (infoblox.test.admin_conn.test_wapi.TestWapiSchema)
+Test WAPI schema of current schema version matches the one ... ok
+test_schemas (infoblox.test.admin_conn.test_wapi.TestWapiSchema)
+Test WAPI schema in every existing version. ... ok
+
+----------------------------------------------------------------------
+Ran 3 tests in 123.232s
+
+OK
+
+======================================================================
+infoblox.test.admin_conn.test_wapi.TestWapiSchemaV1
+2 of 2
+test_max_field_length (infoblox.test.admin_conn.test_wapi.TestWapiSchemaV1) ... ok
+test_overall_schema (infoblox.test.admin_conn.test_wapi.TestWapiSchemaV1)
+Test overall WAPI schema. ... ok
+test_struct_consistency (infoblox.test.admin_conn.test_wapi.TestWapiSchemaV1) ... ok
+
+----------------------------------------------------------------------
+Ran 3 tests in 113.065s
+
+OK
+
+======================================================================
+2 suites ran in 237.567s
+All tests passed.
+1 import error:
+  -N:Not a test module, class or test
+Garbage not found.
+"""
 BAD_NAME = """\
 #WapiIpcBundle215: Not a test module, class or test
 Restoring network settings for loopback interface
@@ -148,6 +210,15 @@ Factory reset...
 """
 
 
+N_PASSING = 4
+N_ERRORED = 3
+N_SCHEMA = 3
+N_TWO_CLASSES = 6
+TIMEOUT = 77
+N_RETRIES = 3
+N_BAD_CHECKS = 2
+
+
 def ids(result):
     return [(t.id.rsplit(".", 1)[-1], t.status, t.reason) for t in result.tests]
 
@@ -164,7 +235,7 @@ def test_parse_passing_run_with_skips():
         ("test_upload_valid_bundle", "skipped", "IPC_TEST_BUNDLE not set"),
     ]
     assert r.tests[0].id == f"{CLS}.test_apply_cloud_connected"
-    assert r.ran == 4
+    assert r.ran == N_PASSING
     assert r.counts == {"ok": 2, "skipped": 2}
     assert r.verdict == "OK (skipped=2)"  # the first verdict line, as before
     assert r.import_errors == []
@@ -179,7 +250,7 @@ def test_parse_docstring_style_result_lines():
         ("test_out_of_sync", "ok", ""),
         ("test_overall_schema", "ok", ""),
     ]
-    assert r.ran == 3
+    assert r.ran == N_SCHEMA
     assert r.verdict == "OK"
     assert r.ok
 
@@ -192,7 +263,7 @@ def test_parse_error_run_takes_the_reason_from_the_traceback():
     )
     assert r.counts == {"ok": 1, "skipped": 1, "ERROR": 1}
     assert r.verdict == "FAILED (errors=1, skipped=1)"
-    assert r.ran == 3
+    assert r.ran == N_ERRORED
     assert not r.ok
 
 
@@ -221,8 +292,8 @@ def test_parse_hung_child_has_fewer_results_than_ran_and_no_ran_line():
 
 def test_ran_sums_over_every_class_in_one_invocation():
     r = py_tests.parse(SCHEMA + SCHEMA.replace("TestWapiSchema", "TestWapiSchemaV1"))
-    assert r.ran == 6
-    assert len(r.tests) == 6
+    assert r.ran == N_TWO_CLASSES
+    assert len(r.tests) == N_TWO_CLASSES
     assert r.ok
 
 
@@ -255,13 +326,14 @@ def test_ok_semantics(kwargs, ok):
 
 # -- command line ----------------------------------------------------------------
 
-def test_command_has_no_check_licenses_keywords_each_n_and_merges_stderr():
+def test_command_has_no_check_licenses_keywords_one_n_then_the_names():
     cmd = py_tests.command(["a.b.C", "a.b.D"], "wapi")
     assert cmd == (
         "/infoblox/tests/bin/run_py_tests --no-check-licenses -k wapi -v "
-        "-N a.b.C -N a.b.D 2>&1"
+        "-N a.b.C a.b.D 2>&1"
     )
     assert "pytest" not in cmd
+    assert cmd.count("-N") == 1  # a repeated -N makes the next -N a test name
 
 
 def test_command_str_default_keywords_and_quoting():
@@ -276,6 +348,35 @@ def test_command_str_default_keywords_and_quoting():
 def test_command_rejects_missing_test_names(bad):
     with pytest.raises(ValueError, match="tests must be"):
         py_tests.command(bad)
+
+
+def test_parse_the_real_double_n_run_is_not_ok_although_every_test_passed():
+    r = py_tests.parse(DOUBLE_N, rc=0)
+    assert [t.status for t in r.tests] == ["ok"] * N_TWO_CLASSES
+    assert r.ran == N_TWO_CLASSES
+    assert r.verdict == "OK"
+    assert r.import_errors == ["-N:Not a test module, class or test"]
+    assert not r.ok
+
+
+def test_parse_expected_failure_is_ok_and_unexpected_success_is_not():
+    out = (f"test_a ({CLS}) ... expected failure\n"
+           f"test_b ({CLS}) ... unexpected success\n"
+           f"test_c ({CLS}) ... ok\n"
+           "Ran 3 tests in 0.1s\n")
+    r = py_tests.parse(out)
+    assert [t.status for t in r.tests] == [
+        "expected failure", "unexpected success", "ok",
+    ]
+    assert r.counts == {"expected failure": 1, "unexpected success": 1, "ok": 1}
+    assert not r.ok
+    assert py_tests.parse(out.replace("unexpected success", "ok")).ok
+
+
+def test_zero_tests_run_is_not_ok():
+    r = py_tests.parse("Ran 0 tests in 0.0s\nOK\n")
+    assert (r.ran, r.tests, r.rc) == (0, [], 0)
+    assert not r.ok
 
 
 # -- NiosContainer.run_py_tests --------------------------------------------------
@@ -315,11 +416,11 @@ def test_run_py_tests_runs_the_command_with_timeout_and_parses(container):
     c, transport = container()
     r = c.run_py_tests([CLS, "x.y.Z"], keywords="wapi", timeout=77)
     assert r.ok
-    assert r.ran == 4
+    assert r.ran == N_PASSING
     run = [(cmd, t) for cmd, t in transport.timeouts if "no-check-licenses" in cmd]
     assert len(run) == 1
-    assert "-k wapi -v -N " + CLS + " -N x.y.Z 2>&1" in run[0][0]
-    assert run[0][1] == 77
+    assert "-k wapi -v -N " + CLS + " x.y.Z 2>&1" in run[0][0]
+    assert run[0][1] == TIMEOUT
 
 
 def test_run_py_tests_default_timeout_is_the_constant(container):
@@ -374,6 +475,45 @@ def test_run_py_tests_record_is_capped_but_result_is_complete(container):
     assert r.raw == out
 
 
+def test_run_py_tests_saves_the_full_output_and_names_the_file_in_the_record(
+    container, tmp_path,
+):
+    out = "".join(f"line{i}\n" for i in range(300))
+    c, _ = container({"run_py_tests --no-check": (0, out, "")})
+    c.output_dir = str(tmp_path)
+    records = []
+    c.on_call = records.append
+
+    r1 = c.run_py_tests(CLS, wait=False)
+    r2 = c.run_py_tests(CLS, wait=False)
+
+    path = str(tmp_path / "py_tests" / "1.log")
+    assert r1.log_path == path
+    assert r2.log_path == str(tmp_path / "py_tests" / "2.log")
+    with open(path, encoding="utf-8") as f:
+        assert f.read() == out
+    rec = next(x for x in records if "no-check-licenses" in x["cmd"])
+    assert rec["stdout"].splitlines()[0] == f"... 100 more lines, full log in {path}"
+
+
+def test_run_py_tests_output_dir_argument_wins_and_none_means_no_file(
+    container, tmp_path,
+):
+    c, _ = container()
+    assert c.run_py_tests(CLS, wait=False).log_path is None
+    c.output_dir = str(tmp_path / "a")
+    r = c.run_py_tests(CLS, wait=False, output_dir=str(tmp_path / "b"))
+    assert r.log_path == str(tmp_path / "b" / "py_tests" / "1.log")
+    assert not (tmp_path / "a").exists()
+
+
+def test_busy_error_names_the_running_process(container):
+    ps = "4242 /usr/bin/python3 /infoblox/tests/bin/run_py_tests -N x.y.Z\n"
+    c, _ = container({"[r]un_py_tests": (0, ps, "")})
+    with pytest.raises(RuntimeError, match=r"4242 /usr/bin/python3 .*run_py_tests"):
+        c.run_py_tests(CLS)
+
+
 def test_sh_timeout_is_passed_only_when_given(container):
     c, transport = container()
     c.sh("ls")
@@ -383,24 +523,25 @@ def test_sh_timeout_is_passed_only_when_given(container):
 
 def test_wait_ready_fails_when_admin_httpd_never_starts(container):
     c, _ = container({"[a]dmin-httpd": (1, "", "")})
-    with pytest.raises(RuntimeError, match="admin-httpd not running"):
+    with pytest.raises(RuntimeError, match="container or admin-httpd not running"):
         c.wait_ready()
 
 
 def test_wait_ready_retries_wapi_until_it_answers_then_gives_up(
-    container, monkeypatch,
+    container, monkeypatch, no_sleep,
 ):
     c, _ = container()
     calls = []
 
     def flaky(timeout):
         calls.append(timeout)
-        if len(calls) < 3:
+        if len(calls) < N_RETRIES:
             raise RuntimeError("not yet")
 
     monkeypatch.setattr(c, "_wait_for_wapi", flaky)
     c.wait_ready()
-    assert len(calls) == 3
+    assert len(calls) == N_RETRIES
+    assert no_sleep == [NIOS_WAPI_POLL_INTERVAL] * 2
 
     def never(timeout):
         raise RuntimeError("never")
@@ -505,7 +646,7 @@ def test_checks_py_tests_records_one_expect_per_test_plus_totals():
     assert by["Ran N tests equals parsed results"]["ok"]
     assert not by["run_py_tests exit code"]["ok"]
     assert by["import errors"]["ok"]
-    assert len(c.failures) == 2
+    assert len(c.failures) == N_BAD_CHECKS
 
 
 def test_checks_py_tests_ran_mismatch_and_import_errors_fail():
@@ -530,26 +671,32 @@ def test_checks_py_tests_passes_a_clean_run():
 
 # -- Ticket.connect_local --------------------------------------------------------
 
-def test_connect_local_builds_a_local_appliance_with_calls_in_the_report(
-    monkeypatch, tmp_path, fake_transport,
-):
+@pytest.fixture
+def local_fakes(monkeypatch, fake_transport):
+    """LocalAppliance.from_config over the fake transport. set_network would reboot
+    a container, so reaching it fails the test."""
     seen = {}
 
-    def from_config(cls, cfg):
-        seen["cfg"] = cfg
-        c = LocalNiosContainer(
-            container_name=cfg.container_name, transport=fake_transport,
-            chroot=cfg.chroot, worktree=cfg.worktree, logger=LOGGER,
-        )
+    def transport(container_name, logger=None):
+        seen["container_name"] = container_name
+        return fake_transport
 
-        @contextlib.contextmanager
-        def console_session(**kw):
-            yield types.SimpleNamespace(run=lambda cmd: "Version : 9.1.0-99\n")
+    def no_network(self, *a, **kw):
+        raise AssertionError("set_network must not run")
 
-        c.console_session = console_session
-        return c
+    @contextlib.contextmanager
+    def console_session(self, **kw):
+        yield types.SimpleNamespace(run=lambda cmd: "Version : 9.1.0-99\n")
 
-    monkeypatch.setattr(LocalNiosContainer, "from_config", classmethod(from_config))
+    monkeypatch.setattr(appliance_mod, "LocalDockerTransport", transport)
+    monkeypatch.setattr(LocalNiosContainer, "set_network", no_network)
+    monkeypatch.setattr(LocalNiosContainer, "console_session", console_session)
+    return seen
+
+
+def test_connect_local_builds_a_local_appliance_with_calls_in_the_report(
+    local_fakes, tmp_path,
+):
     t = Ticket("NIOS-1", None, results_dir=str(tmp_path), worktree="/wt",
                wapi_version="v2.15")
     out = {}
@@ -566,11 +713,13 @@ def test_connect_local_builds_a_local_appliance_with_calls_in_the_report(
     with pytest.raises(SystemExit) as e, t:
         body(t)
     assert e.value.code == 0
-    assert isinstance(out["app"], LocalAppliance)
-    assert out["app"].wapi_version == "v2.15"
-    assert out["app"].hostname == "drogon"
-    assert seen["cfg"].container_name == "drogon"
-    assert seen["cfg"].worktree == "/wt"
+    app = out["app"]
+    assert isinstance(app, LocalAppliance)
+    assert app.wapi_version == "v2.15"
+    assert app.hostname == "drogon"
+    assert app.container.worktree == "/wt"
+    assert app.container.output_dir == t.output_dir
+    assert local_fakes["container_name"] == "drogon"
     assert t.host == "drogon"
     assert t.build == "9.1.0-99"
     with open(os.path.join(t.output_dir, "report.md")) as f:
@@ -579,21 +728,7 @@ def test_connect_local_builds_a_local_appliance_with_calls_in_the_report(
     assert "$ echo hi  -> exit 0" in report
 
 
-def test_connect_local_chroot_is_passed_when_given(
-    monkeypatch, tmp_path, fake_transport,
-):
-    seen = {}
-
-    def from_config(cls, cfg):
-        seen["chroot"] = cfg.chroot
-        return LocalNiosContainer(
-            container_name=cfg.container_name, transport=fake_transport,
-            chroot=cfg.chroot, logger=LOGGER,
-        )
-
-    monkeypatch.setattr(LocalNiosContainer, "from_config", classmethod(from_config))
-    monkeypatch.setattr(Ticket, "_read_build", lambda self: None)
+def test_connect_local_chroot_is_passed_when_given(local_fakes, tmp_path):
     t = Ticket("n", None, results_dir=str(tmp_path))
     t.connect_local("drogon", chroot="/local/chroot")
-    assert seen["chroot"] == "/local/chroot"
-    assert ticket_mod.LocalAppliance is LocalAppliance
+    assert t.container.chroot == "/local/chroot"

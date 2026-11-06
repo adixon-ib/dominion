@@ -30,11 +30,12 @@ from dataclasses import dataclass, field
 
 from . import oplog
 from .appliance import Appliance, LocalAppliance, lab_network
-from .config import ApplianceConfig, LocalContainerConfig
+from .config import ApplianceConfig, LocalApplianceConfig
 from .constants import WAPI_VERSION
-from .container import LocalNiosContainer, NiosContainer
+from .container import NiosContainer
 from .harness import Run
 from .log import create_logger
+from .py_tests import OK_STATUSES
 
 PACKAGE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -120,7 +121,7 @@ class Checks:
         else fails with its reason as got), the Ran N count against the parsed
         tests, import errors and the exit code."""
         for t in result.tests:
-            ok = t.status in ("ok", "skipped")
+            ok = t.status in OK_STATUSES
             got = t.status if ok or not t.reason else f"{t.status}: {t.reason}"
             self.expect(t.id, "ok or skipped", got, ok=ok)
         self.expect("Ran N tests equals parsed results", result.ran, len(result.tests))
@@ -367,21 +368,21 @@ class Ticket:
         self, container_name: str, *, chroot: str | None = None, ip: str = "",
     ) -> None:
         """Target a local NCC container instead of a lab appliance. ip is for
-        display only: LocalAppliance.from_config without one would run set_network
-        and reboot, so the appliance is built directly."""
+        display only: an unset ip (None) would make LocalAppliance.from_config run
+        set_network and reboot, "" does not."""
         cfg = {"chroot": chroot} if chroot else {}
-        container = LocalNiosContainer.from_config(LocalContainerConfig(
-            container_name=container_name, worktree=self.worktree,
-            output_dir=self.output_dir, **cfg,
-        ))
         self.host = self.host or container_name
-        self._adopt(LocalAppliance(container, container._logger, ip))
+        self._adopt(LocalAppliance.from_config(LocalApplianceConfig(
+            container_name=container_name, ip=ip, worktree=self.worktree,
+            output_dir=self.output_dir, **cfg,
+        )))
         self._log.info("Connected local container %s", container_name)
         self._read_build()
 
     def _adopt(self, app) -> None:
         app.wapi_version = self.wapi_version
         app.on_call = self._record_call
+        app.container.output_dir = self.output_dir
         self._app = app
         self.run.add(app)
 

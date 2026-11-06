@@ -13,7 +13,7 @@ import shlex
 from dataclasses import dataclass, field
 
 RUN_PY_TESTS = "/infoblox/tests/bin/run_py_tests"
-OK_STATUSES = ("ok", "skipped")
+OK_STATUSES = ("ok", "skipped", "expected failure")
 REASON_MAX = 300
 
 RESULT_RE = re.compile(
@@ -42,14 +42,16 @@ class PyTestResult:
     rc: int
     import_errors: list[str] = field(default_factory=list)
     verdict: str = "no verdict line"
+    log_path: str | None = None  # file with raw, when the container had an output dir
 
     @property
     def ok(self) -> bool:
-        """rc 0, nothing but ok or skipped, no import error, and as many parsed
-        results as the "Ran N tests" count."""
+        """rc 0, at least one test ran, nothing but ok, skipped or expected
+        failure, no import error, and as many parsed results as the "Ran N tests"
+        count."""
         return (
             self.rc == 0
-            and self.ran is not None
+            and bool(self.ran)
             and not self.import_errors
             and all(t.status in OK_STATUSES for t in self.tests)
             and len(self.tests) == self.ran
@@ -57,14 +59,19 @@ class PyTestResult:
 
 
 def command(tests: str | list[str], keywords: str = "all") -> str:
-    """The run_py_tests command line: one -N per test, stderr merged."""
+    """The run_py_tests command line: -N once, then the test names, stderr merged.
+
+    -N is the boolean --dontfork flag (ibtest.py getopt 'hHvqk:l:r:NCe:...'), the
+    tests are positional. A repeated -N makes the second one a test name: "-N:
+    Not a test module", an import error with exit code 0."""
     names = [tests] if isinstance(tests, str) else list(tests)
     if not names or not all(isinstance(n, str) and n for n in names):
         raise ValueError(f"tests must be a name or a list of names, got {tests!r}")
     q = shlex.quote
     return (
         f"{RUN_PY_TESTS} --no-check-licenses -k {q(keywords)} -v "
-        + " ".join(f"-N {q(n)}" for n in names)
+        + "-N "
+        + " ".join(q(n) for n in names)
         + " 2>&1"
     )
 
@@ -75,8 +82,12 @@ def parse(output: str, rc: int = 0) -> PyTestResult:
         lines = [ln.strip() for ln in body.splitlines() if ln.strip()]
         reasons[f"{cls}.{name}"] = (lines[-1] if lines else "")[:REASON_MAX]
     tests = []
-    for name, cls, status, rest in RESULT_RE.findall(output):
+    for name, cls, first, tail in RESULT_RE.findall(output):
         tid = f"{cls}.{name}"
+        status, rest = first, tail
+        word = re.match(r"\s*(failure|success)\b", rest)
+        if status in ("expected", "unexpected") and word:
+            status, rest = f"{status} {word.group(1)}", rest[word.end():]
         reason = rest.strip().strip("'\"") or reasons.get(tid, "")
         tests.append(PyTest(tid, status, reason))
     counts: dict[str, int] = {}
