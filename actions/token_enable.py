@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING
 from dominion.src.constants import (
     NIOS_WAPI_POLL_INTERVAL,
     TOKEN_BUNDLE_ENABLE_TIMEOUT,
+    TOKEN_BUNDLE_WAPI_VERSION,
 )
 from dominion.src.wapi import WapiError
 
@@ -22,7 +23,6 @@ if TYPE_CHECKING:
 _REQUIRED_MEMBERS = ("tab.json", "docker-compose.yml", "usage_calculator")
 _REMOTE_BUNDLE_PATH = "/storage/tmp/token_bundle.tar"
 _AIRGAPPED_FLAG = "/infoblox/var/flags/airgapped_skip"
-_BUNDLE_WAPI_VERSION = "v2.15"
 
 
 def _version_tuple(version: str) -> tuple[int, ...]:
@@ -81,7 +81,7 @@ def _prepare_bundle(bundle_path: str, lpc_uid: str) -> str:
     return out_path
 
 
-def _patched_bundle(app: Appliance, bundle_path: str) -> str:
+def patched_bundle(app: Appliance, bundle_path: str) -> str:
     """Return a copy of the bundle patched with the appliance's lpc_uid.
 
     The caller removes the returned file's directory.
@@ -100,6 +100,26 @@ def _patched_bundle(app: Appliance, bundle_path: str) -> str:
     return _prepare_bundle(bundle_path, lpc_uid)
 
 
+_patched_bundle = patched_bundle  # old private name
+
+
+def upload_bundle_token(app: Appliance, bundle_path: str) -> str:
+    """Upload the bundle, patched with the appliance's lpc_uid, with fileop.
+
+    Returns the upload token for ipc:bundle upload. The patched copy is
+    removed afterwards.
+
+    Raises:
+        FileNotFoundError: If bundle_path does not exist.
+        WapiError: If the fileop upload fails.
+    """
+    patched = patched_bundle(app, bundle_path)
+    try:
+        return app.wapi.upload_file(patched)
+    finally:
+        shutil.rmtree(os.path.dirname(patched))
+
+
 def enable_token_mode(app: Appliance, bundle_path: str) -> None:
     """Enable IPc (token) mode on an air-gapped appliance.
 
@@ -115,7 +135,7 @@ def enable_token_mode(app: Appliance, bundle_path: str) -> None:
         FileNotFoundError: If bundle_path does not exist.
         RuntimeError: If the console does not confirm IPc mode enabled.
     """
-    patched = _patched_bundle(app, bundle_path)
+    patched = patched_bundle(app, bundle_path)
     transport = app.container._transport
 
     app._logger.debug("Uploading bundle to %s:%s", app.hostname, _REMOTE_BUNDLE_PATH)
@@ -171,14 +191,10 @@ def enable_token_mode_wapi(
         TimeoutError: If the migration does not finish within timeout.
     """
     log = app._logger
-    if _version_tuple(app.wapi_version) < _version_tuple(_BUNDLE_WAPI_VERSION):
-        app.wapi_version = _BUNDLE_WAPI_VERSION
-    patched = _patched_bundle(app, bundle_path)
-    try:
-        log.info("Uploading bundle to %s via fileop", app.hostname)
-        token = app.wapi.upload_file(patched)
-    finally:
-        shutil.rmtree(os.path.dirname(patched))
+    if _version_tuple(app.wapi_version) < _version_tuple(TOKEN_BUNDLE_WAPI_VERSION):
+        app.wapi_version = TOKEN_BUNDLE_WAPI_VERSION
+    log.info("Uploading bundle to %s via fileop", app.hostname)
+    token = upload_bundle_token(app, bundle_path)
 
     try:
         log.info("ipc:bundle upload")

@@ -67,6 +67,9 @@ def lab_network(hostname: str) -> tuple[str, str, str]:
     return ip_match.group(1), mask_match.group(1), gw_match.group(1)
 
 
+USAGE_MODE_RE = re.compile(r"NIOS usage mode: (Licenses|IPc)\b")
+
+
 class _ApplianceBase:
 
     def __init__(self, container: NiosContainer, logger: NiosLogger):
@@ -114,6 +117,15 @@ class _ApplianceBase:
 
     def console_session(self, **kwargs):
         return self.container.console_session(**kwargs)
+
+    def usage_mode(self) -> str:
+        """"Licenses" or "IPc", from the console `show nios_usage_mode`."""
+        with self.console_session() as console:
+            out = console.run("show nios_usage_mode")
+        m = USAGE_MODE_RE.search(out)
+        if not m:
+            raise RuntimeError(f"cannot parse usage mode from {out!r}")
+        return m.group(1)
 
     def deploy_serial_console(self) -> DeployResult:
         return self.container.deploy_serial_console()

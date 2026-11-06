@@ -67,16 +67,17 @@ class _BaseTransport:
         timeout: int | None = None,
         quiet: bool = False,
     ) -> tuple[int, str, str]:
+        timeout = timeout if timeout is not None else self.timeout
         try:
             result = subprocess.run(
                 argv,
                 capture_output=True,
-                timeout=timeout or self.timeout,
+                timeout=timeout,
                 input=stdin_data,
             )
         except subprocess.TimeoutExpired as exc:
             raise TransportError(
-                f"Command timed out after {timeout or self.timeout}s: {' '.join(argv)}"
+                f"Command timed out after {timeout}s: {' '.join(argv)}"
             ) from exc
         except FileNotFoundError as exc:
             raise TransportError(f"Command not found: {argv[0]}") from exc
@@ -180,10 +181,13 @@ class SSHDockerTransport(_BaseTransport):
             cmd += ["-i", self.key_path]
         return cmd
 
-    def run(self, cmd: str, check: bool = True, quiet: bool = False) -> tuple[int, str, str]:
+    def run(
+        self, cmd: str, check: bool = True, quiet: bool = False,
+        timeout: int | None = None,
+    ) -> tuple[int, str, str]:
         docker_cmd = f"docker exec {self.container_name} {cmd}"
         argv = self._ssh_base + [docker_cmd]
-        return self._exec(argv, check=check, quiet=quiet)
+        return self._exec(argv, check=check, quiet=quiet, timeout=timeout)
 
     def run_on_host(self, cmd: str, check: bool = True, quiet: bool = False) -> tuple[int, str, str]:
         argv = self._ssh_base + [cmd]
@@ -256,9 +260,12 @@ class LocalDockerTransport(_BaseTransport):
         """No SSH hop needed. cmd already targets the local Docker daemon."""
         return cmd
 
-    def run(self, cmd: str, check: bool = True, quiet: bool = False) -> tuple[int, str, str]:
+    def run(
+        self, cmd: str, check: bool = True, quiet: bool = False,
+        timeout: int | None = None,
+    ) -> tuple[int, str, str]:
         argv = ["docker", "exec", self.container_name, "bash", "-c", cmd]
-        return self._exec(argv, check=check, quiet=quiet)
+        return self._exec(argv, check=check, quiet=quiet, timeout=timeout)
 
     def run_on_host(self, cmd: str, check: bool = True, quiet: bool = False) -> tuple[int, str, str]:
         argv = shlex.split(cmd)

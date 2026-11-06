@@ -58,13 +58,14 @@ class WapiClient:
         self._logger = logger or log
         self._base_url = f"https://localhost/wapi/{version}"
 
-    def _request(
+    def _request(  # noqa: PLR0913, PLR0917
         self,
         method: str,
         path: str,
         data: dict | None = None,
         params: str = "",
         check: bool = True,
+        timeout: int | None = None,
     ) -> tuple[int, Any]:
         url = f"{self._base_url}/{path}"
         if params:
@@ -79,7 +80,8 @@ class WapiClient:
 
         rec_path = url.removeprefix("https://localhost")
         try:
-            _, out, _ = self._transport.run(cmd, check=False)
+            opts = {} if timeout is None else {"timeout": timeout}
+            _, out, _ = self._transport.run(cmd, check=False, **opts)
         except TransportError as e:
             self._emit(method, rec_path, data, 0, str(e))
             raise
@@ -130,15 +132,20 @@ class WapiClient:
         _, parsed = self._request("DELETE", path, check=check)
         return parsed
 
-    def request(
+    def request(  # noqa: PLR0913, PLR0917
         self,
         method: str,
         path: str,
         data: dict | None = None,
         params: str = "",
         check: bool = True,
+        timeout: int | None = None,
     ) -> tuple[int, Any]:
-        return self._request(method, path, data=data, params=params, check=check)
+        """One request: (status, parsed body). timeout (seconds) overrides the
+        transport's default for this call only."""
+        return self._request(
+            method, path, data=data, params=params, check=check, timeout=timeout,
+        )
 
     def upload_file(self, local_path: str) -> str:
         """Upload a local file via fileop uploadinit and return its token.

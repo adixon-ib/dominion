@@ -8,6 +8,7 @@ _configure_network_console) — all driven with a FakeTransport, never a real
 docker/ssh call.
 """
 
+import hashlib
 import json
 import logging
 import tempfile
@@ -16,9 +17,11 @@ from contextlib import contextmanager
 import pytest
 
 from dominion import (
+    DeployError,
     LocalContainerConfig,
     LocalDockerTransport,
     LocalNiosContainer,
+    LogMark,
     NiosContainer,
     SSHDockerTransport,
 )
@@ -649,3 +652,129 @@ def test_hook_is_per_container_and_class_default_stays_none(fake_transport_facto
     assert [r["cmd"] for r in records] == ["x"]
     assert b.on_call is None
     assert NiosContainer.on_call is None
+
+
+# -- upload_file / log call records ---------------------------------------------
+
+def _container(transport):
+    return NiosContainer(
+        container_name="nios", transport=transport,
+        chroot=DEFAULT_CHROOT, logger=LOGGER,
+    )
+
+
+def test_upload_file_verifies_md5_and_cleans_pycache(fake_transport, tmp_path):
+    src = tmp_path / "oplog.py"
+    src.write_text("x = 1\n")
+    c = _container(fake_transport)
+    records = []
+    c.on_call = records.append
+
+    h = c.upload_file(str(src), "/opt/lib/oplog.py")
+
+    assert h == hashlib.md5(b"x = 1\n").hexdigest()
+    assert ("upload", str(src), "/opt/lib/oplog.py") in fake_transport.calls
+    assert ("run", "rm -f /opt/lib/oplog.pyc /opt/lib/oplog.pys") in fake_transport.calls
+    assert records[0]["kind"] == "sh"
+    assert h in records[0]["stdout"]
+
+
+def test_upload_file_mismatch_raises_with_both_hashes(
+    fake_transport_factory, tmp_path,
+):
+    src = tmp_path / "oplog.py"
+    src.write_text("x = 1\n")
+    c = _container(fake_transport_factory(corrupt_uploads=True))
+
+    with pytest.raises(DeployError) as e:
+        c.upload_file(str(src), "/opt/lib/oplog.py")
+
+    local = hashlib.md5(b"x = 1\n").hexdigest()
+    remote = hashlib.md5(b"x = 1\n\x00corrupt").hexdigest()
+    assert f"local={local} remote={remote}" in str(e.value)
+    assert e.value.artifact == "/opt/lib/oplog.py"
+
+
+def test_dump_and_count_log_emit_records(fake_transport_factory, tmp_path):
+    transport = fake_transport_factory(responses={
+        "grep -c": (0, "3\n", ""),
+        "tail": (0, "a\nb\n", ""),
+    })
+    c = _container(transport)
+    records = []
+    c.on_call = records.append
+    mark = LogMark(log_path="/infoblox/var/infoblox.log", line_count=10)
+
+    c.dump_log("/infoblox/var/infoblox.log", dest=tmp_path / "o.log",
+               since=mark, grep="ipc:bundle ", fixed=True)
+    assert c.count_log("/infoblox/var/infoblox.log", "x", since=mark) == 3
+
+    assert [r["kind"] for r in records] == ["sh", "sh"]
+    assert records[0]["cmd"] == (
+        "tail -n +11 /infoblox/var/infoblox.log | grep -F -- 'ipc:bundle '"
+    )
+    assert records[0]["stdout"] == "a\nb\n"
+    assert records[1]["stdout"] == "3\n"
+
+
+def test_dump_log_grep_is_regex_unless_fixed(fake_transport, tmp_path):
+    c = _container(fake_transport)
+    c.dump_log("/l", dest=tmp_path / "o.log", grep="a.b")
+    assert fake_transport.calls[-1] == ("run", "cat /l | grep -- a.b")
+
+
+def test_dump_log_record_keeps_last_200_lines_but_dump_is_complete(
+    fake_transport_factory, tmp_path,
+):
+    text = "".join(f"line{i}\n" for i in range(250))
+    c = _container(fake_transport_factory(responses={"cat": (0, text, "")}))
+    records = []
+    c.on_call = records.append
+    dest = tmp_path / "o.log"
+
+    dump = c.dump_log("/l", dest=dest)
+
+    out = records[0]["stdout"].splitlines()
+    assert out[0] == f"... 50 more lines, full log in {dest}"
+    assert out[1:] == [f"line{i}" for i in range(50, 250)]
+    assert dump.text == text
+    assert dest.read_text() == text
+
+
+def test_dump_log_record_unchanged_when_short(fake_transport_factory, tmp_path):
+    text = "".join(f"line{i}\n" for i in range(200))
+    c = _container(fake_transport_factory(responses={"cat": (0, text, "")}))
+    records = []
+    c.on_call = records.append
+    c.dump_log("/l", dest=tmp_path / "o.log")
+    assert records[0]["stdout"] == text
+
+
+def test_upload_file_missing_remote_hash_raises_clear_error(
+    fake_transport_factory, tmp_path,
+):
+    src = tmp_path / "oplog.py"
+    src.write_text("x")
+    transport = fake_transport_factory()
+    transport.upload = lambda local, remote: None  # nothing lands in the container
+    transport.responses = {"md5sum": (1, "", "No such file")}
+    c = _container(transport)
+
+    with pytest.raises(DeployError, match=r"md5sum failed or file missing: /d/x\.py"):
+        c.upload_file(str(src), "/d/x.py")
+
+
+def test_upload_file_quotes_paths_with_spaces(fake_transport_factory, tmp_path):
+    src = tmp_path / "a.py"
+    src.write_text("x")
+    fake_transport = fake_transport_factory(
+        responses={"md5sum": (0, f"{hashlib.md5(b'x').hexdigest()}  a\n", "")},
+    )
+    c = _container(fake_transport)
+
+    c.upload_file(str(src), "/d e/a.py")
+
+    cmds = [x[1] for x in fake_transport.calls if x[0] == "run"]
+    assert "rm -f '/d e/a.pyc' '/d e/a.pys'" in cmds
+    assert "rm -f '/d e/__pycache__/a.cpython-'*.pyc" in cmds
+    assert "md5sum '/d e/a.py' 2>/dev/null" in cmds

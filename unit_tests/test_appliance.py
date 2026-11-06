@@ -537,3 +537,38 @@ def test_on_call_is_per_appliance(ssh_always_reachable):
     assert b.on_call is None
     assert b.container.on_call is None
     assert b.wapi.on_call is None
+
+
+# -- usage_mode ------------------------------------------------------------------
+
+class _ModeApp(appliance_mod._ApplianceBase):
+    def __init__(self, out):
+        self.out = out
+        self.ran = []
+
+    @contextmanager
+    def console_session(self, **kwargs):
+        outer = self
+
+        class C:
+            def run(self, cmd):
+                outer.ran.append(cmd)
+                return outer.out
+
+        yield C()
+
+
+@pytest.mark.parametrize("out, want", [
+    ("NIOS usage mode: Licenses\n", "Licenses"),
+    ("show nios_usage_mode\nNIOS usage mode: IPc\nInfoblox > ", "IPc"),
+])
+def test_usage_mode_parses_console_output(out, want):
+    app = _ModeApp(out)
+    assert app.usage_mode() == want
+    assert app.ran == ["show nios_usage_mode"]
+
+
+@pytest.mark.parametrize("out", ["", "NIOS usage mode: Other", "garbled"])
+def test_usage_mode_raises_on_unparseable_output(out):
+    with pytest.raises(RuntimeError, match="cannot parse usage mode"):
+        _ModeApp(out).usage_mode()

@@ -327,3 +327,24 @@ class TestOnCall:
         assert records[0]["status"] == 0
         assert records[0]["response"] == "ssh timed out"
         assert records[0]["path"] == "/wapi/v2.12/grid"
+
+
+class TestRequestTimeout:
+
+    def test_timeout_reaches_transport_for_that_call_only(self):
+        seen = []
+
+        class T:
+            def run(self, cmd, check=True, quiet=False, timeout=None):
+                seen.append(timeout)
+                return 0, _make_response({}), ""
+
+        client = WapiClient(transport=T())
+        client.request("POST", "ipc:bundle", data={}, timeout=300)
+        client.request("GET", "grid")
+        assert seen == [300, None]
+
+    def test_no_timeout_keeps_old_transport_signature(self):
+        t = FakeTransport(stdout=_make_response([]))
+        WapiClient(transport=t).request("GET", "grid")
+        assert len(t.calls) == 1

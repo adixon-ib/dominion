@@ -336,3 +336,27 @@ def test_command_error_message_includes_cmd_and_stderr():
     assert "false" in str(err)
     assert "permission denied" in str(err)
     assert err.exit_code == 1
+
+
+@pytest.mark.parametrize(("make", "timeout_expected"), [
+    (lambda: SSHDockerTransport(host="h", timeout=30), 30),
+    (lambda: LocalDockerTransport(container_name="c", timeout=30), 30),
+])
+def test_run_timeout_reaches_subprocess_and_zero_is_not_ignored(
+    monkeypatch, make, timeout_expected,
+):
+    import dominion.src.transport as transport_mod
+    seen = []
+
+    def fake_run(argv, **kwargs):
+        seen.append(kwargs["timeout"])
+        return FakeCompletedProcess()
+
+    monkeypatch.setattr(transport_mod.subprocess, "run", fake_run)
+    t = make()
+
+    t.run("x")
+    t.run("x", timeout=300)
+    t.run("x", timeout=0)
+
+    assert seen == [timeout_expected, 300, 0]
