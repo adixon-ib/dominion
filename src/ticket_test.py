@@ -46,6 +46,9 @@ class TicketTest(abc.ABC):
     deploy_files: ClassVar[dict[str, str]] = {}  # worktree subpath -> container path
     deploy_groups: ClassVar[set[str]] = set()  # deploy_token_py groups, empty = none
     initial_state: ClassVar[dict] = {}  # Ticket(state=...), becomes self.state
+    deploy_title = "deploy"  # phase "2. <deploy_title>"
+    preflight_title = "preflight"  # phase "3. <preflight_title>"
+    home_title = "home"  # the home step, unnumbered
     deploy_required: ClassVar[tuple[str, ...]] = ()  # worktree subpaths that must exist
 
     def __init__(  # noqa: PLR0913
@@ -166,17 +169,20 @@ class TicketTest(abc.ABC):
             self._t = t
             connect = t.phase("1. connect", t.connect)
             deployed = t.phase(
-                "2. deploy", self.deploy, needs=connect, skip=self._deploy_skip(),
+                f"2. {self.deploy_title}", self.deploy, needs=connect,
+                skip=self._deploy_skip(),
             )
             preflight = t.phase(
-                "3. preflight", self.preflight, needs=[connect, deployed],
+                f"3. {self.preflight_title}", self.preflight,
+                needs=[connect, deployed],
             )
             steps = [
                 (f"{n}. {meta[2]}", meta[0], meta[1], getattr(self, attr))
                 for n, (attr, meta) in enumerate(self._steps(), FIRST_STEP_NUMBER)
             ]
+            home = (self.home_title, self.home_state, self.home)
             t.steps(
                 steps, probe=self.probe, needs=preflight,
-                home=None if self.skip_home else ("home", self.home_state, self.home),
+                home=None if self.skip_home else home,
             )
 

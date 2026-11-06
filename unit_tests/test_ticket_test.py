@@ -456,3 +456,59 @@ def test_ipc_upload_bundle_token_survives_initial_state_without_tokens(
                    go=step("A", "B", "go")(go), probe=lambda self: box.state)
     run(cls("vm-1", results_dir=str(tmp_path), skip_home=True))
     assert out == ["tok", ["tok"]]
+
+
+# -- enable_ipc and phase titles -------------------------------------------------
+
+def test_enable_ipc_runs_action_keeps_token_and_returns_result(
+    box, monkeypatch, tmp_path,
+):
+    seen = []
+
+    def fake_enable(app, path):
+        seen.append((app, path))
+        return {"token": "tok", "status": {"overall_status": "COMPLETED"}}
+
+    monkeypatch.setattr(ipc_ticket, "enable_token_mode_wapi", fake_enable)
+    out = []
+
+    def go(self):
+        out.append(self.enable_ipc())
+        out.append(self.enable_ipc("/other.tar"))
+        out.append(list(self.state.tokens))
+        box.state = "B"
+
+    cls = ipc_test(box, home_state="A", initial_state={},
+                   go=step("A", "B", "go")(go), probe=lambda self: box.state)
+    run(cls("vm-1", results_dir=str(tmp_path), skip_home=True))
+    assert [p for _, p in seen] == ["/b/token_bundle.tar", "/other.tar"]
+    assert isinstance(seen[0][0], FakeApp)
+    assert out[0]["status"] == {"overall_status": "COMPLETED"}
+    assert out[2] == ["tok", "tok"]
+
+
+def test_enable_ipc_needs_a_bundle(box, monkeypatch):
+    monkeypatch.setattr(
+        ipc_ticket, "enable_token_mode_wapi", lambda app, path: pytest.fail("called"),
+    )
+    tt = ipc_test(box, bundle_path=None)("vm-1")
+    tt._t = types.SimpleNamespace(app=None, state=types.SimpleNamespace())
+    with pytest.raises(ValueError, match="no bundle"):
+        tt.enable_ipc()
+
+
+def test_phase_titles_are_overridable_and_default_output_is_unchanged(box, tmp_path):
+    cls = make_test(
+        box, deploy_groups={"pyabs"}, deploy_title="push files",
+        preflight_title="box clean", home_title="reset",
+    )
+    tt = cls("vm-1", results_dir=str(tmp_path))
+    assert run(tt) == 0
+    assert headings(report(tt)) == [
+        "1. connect", "2. push files", "3. box clean", "4. to b", "5. to c", "reset",
+    ]
+
+
+def test_default_titles():
+    assert (TicketTest.deploy_title, TicketTest.preflight_title,
+            TicketTest.home_title) == ("deploy", "preflight", "home")

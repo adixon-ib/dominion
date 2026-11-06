@@ -7,7 +7,11 @@ and bundle uploads are one call each.
 from __future__ import annotations
 
 from dominion.actions.appliance_reset_all import reset_all
-from dominion.actions.token_enable import BUNDLE_OBJECT, upload_bundle_token
+from dominion.actions.token_enable import (
+    BUNDLE_OBJECT,
+    enable_token_mode_wapi,
+    upload_bundle_token,
+)
 from dominion.src.constants import (
     TOKEN_BUNDLE_APPLY_TIMEOUT,
     TOKEN_BUNDLE_WAPI_VERSION,
@@ -33,16 +37,30 @@ class IpcTicketTest(TicketTest):
     def home(self):
         reset_all(self.app)
 
+    def _bundle_path(self, bundle: str | None) -> str:
+        path = bundle or self.bundle_path
+        if not path:
+            raise ValueError("no bundle: pass one or set bundle_path")
+        return path
+
+    def _keep_token(self, token: str) -> None:
+        vars(self.state).setdefault("tokens", []).append(token)
+
     def upload_bundle_token(self, bundle: str | None = None) -> str:
         """Fileop upload of the bundle patched with this grid's lpc_uid. The token
         is also appended to self.state.tokens (created if missing), for the
         oplog_contract secrets."""
-        path = bundle or self.bundle_path
-        if not path:
-            raise ValueError("no bundle: pass one or set bundle_path")
-        token = upload_bundle_token(self.app, path)
-        vars(self.state).setdefault("tokens", []).append(token)
+        token = upload_bundle_token(self.app, self._bundle_path(bundle))
+        self._keep_token(token)
         return token
+
+    def enable_ipc(self, bundle: str | None = None) -> dict:
+        """enable_token_mode_wapi with the bundle (default bundle_path): upload,
+        enable, poll until done. The upload token is appended to
+        self.state.tokens. Returns the action's result dict."""
+        result = enable_token_mode_wapi(self.app, self._bundle_path(bundle))
+        self._keep_token(result["token"])
+        return result
 
     def bundle(self, func: str, data: dict, timeout: int | None = None):
         """POST ipc:bundle?_function=func: (status, body), no raise on HTTP
