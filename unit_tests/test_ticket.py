@@ -49,7 +49,7 @@ class FakeApp:
     def console_session(self):
         yield FakeConsole(self.console_text)
 
-    log_lines = ["old rid=0\n", "new ipc:bundle rid=1\n", "new other\n"]
+    log_lines = ("old rid=0\n", "new ipc:bundle rid=1\n", "new other\n")
 
     def mark_infoblox_log(self):
         return LogMark(log_path="/ib.log", line_count=1)
@@ -1340,7 +1340,8 @@ def test_expect_status_records_label_with_body_and_fails_on_mismatch():
     c = Checks("t", sink)
     c.expect_status("apply", 400, 400, "x" * 300)
     c.expect_status("apply", 400, 200, {"a": 1})
-    assert sink[0]["ok"] and not sink[1]["ok"]
+    assert sink[0]["ok"]
+    assert not sink[1]["ok"]
     assert sink[0]["label"] == f"apply: HTTP status (body {'x' * 200!r})"
     assert "{'a': 1}" in sink[1]["label"]
     assert len(c.failures) == 1

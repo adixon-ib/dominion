@@ -721,3 +721,60 @@ def test_dump_log_grep_is_regex_unless_fixed(fake_transport, tmp_path):
     c = _container(fake_transport)
     c.dump_log("/l", dest=tmp_path / "o.log", grep="a.b")
     assert fake_transport.calls[-1] == ("run", "cat /l | grep -- a.b")
+
+
+def test_dump_log_record_keeps_last_200_lines_but_dump_is_complete(
+    fake_transport_factory, tmp_path,
+):
+    text = "".join(f"line{i}\n" for i in range(250))
+    c = _container(fake_transport_factory(responses={"cat": (0, text, "")}))
+    records = []
+    c.on_call = records.append
+    dest = tmp_path / "o.log"
+
+    dump = c.dump_log("/l", dest=dest)
+
+    out = records[0]["stdout"].splitlines()
+    assert out[0] == f"... 50 more lines, full log in {dest}"
+    assert out[1:] == [f"line{i}" for i in range(50, 250)]
+    assert dump.text == text
+    assert dest.read_text() == text
+
+
+def test_dump_log_record_unchanged_when_short(fake_transport_factory, tmp_path):
+    text = "".join(f"line{i}\n" for i in range(200))
+    c = _container(fake_transport_factory(responses={"cat": (0, text, "")}))
+    records = []
+    c.on_call = records.append
+    c.dump_log("/l", dest=tmp_path / "o.log")
+    assert records[0]["stdout"] == text
+
+
+def test_upload_file_missing_remote_hash_raises_clear_error(
+    fake_transport_factory, tmp_path,
+):
+    src = tmp_path / "oplog.py"
+    src.write_text("x")
+    transport = fake_transport_factory()
+    transport.upload = lambda local, remote: None  # nothing lands in the container
+    transport.responses = {"md5sum": (1, "", "No such file")}
+    c = _container(transport)
+
+    with pytest.raises(DeployError, match=r"md5sum failed or file missing: /d/x\.py"):
+        c.upload_file(str(src), "/d/x.py")
+
+
+def test_upload_file_quotes_paths_with_spaces(fake_transport_factory, tmp_path):
+    src = tmp_path / "a.py"
+    src.write_text("x")
+    fake_transport = fake_transport_factory(
+        responses={"md5sum": (0, f"{hashlib.md5(b'x').hexdigest()}  a\n", "")},
+    )
+    c = _container(fake_transport)
+
+    c.upload_file(str(src), "/d e/a.py")
+
+    cmds = [x[1] for x in fake_transport.calls if x[0] == "run"]
+    assert "rm -f '/d e/a.pyc' '/d e/a.pys'" in cmds
+    assert "rm -f '/d e/__pycache__/a.cpython-'*.pyc" in cmds
+    assert "md5sum '/d e/a.py' 2>/dev/null" in cmds

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import shlex
 import shutil
 import tempfile
 import time
@@ -115,7 +116,9 @@ class DeployMixin:
         return h.hexdigest()
 
     def _remote_md5(self, path: str) -> str | None:
-        code, out, _ = self._transport.run(f"md5sum {path} 2>/dev/null", check=False)
+        code, out, _ = self._transport.run(
+            f"md5sum {shlex.quote(path)} 2>/dev/null", check=False,
+        )
         if code != 0 or not out.strip():
             return None
         return out.split()[0]
@@ -142,11 +145,13 @@ class DeployMixin:
     def _clean_pycache(self, container_path: str) -> None:
         base = os.path.splitext(os.path.basename(container_path))[0]
         cdir = os.path.dirname(container_path)
+        q = shlex.quote
         self._transport.run(
-            f"rm -f {cdir}/{base}.pyc {cdir}/{base}.pys", check=False
+            f"rm -f {q(f'{cdir}/{base}.pyc')} {q(f'{cdir}/{base}.pys')}", check=False
         )
+        # glob stays outside the quotes
         self._transport.run(
-            f"rm -f {cdir}/__pycache__/{base}.cpython-*.pyc", check=False
+            f"rm -f {q(f'{cdir}/__pycache__/{base}.cpython-')}*.pyc", check=False
         )
 
     # -- deploy: serial_console --------------------------------------------
@@ -360,17 +365,8 @@ class DeployMixin:
 
         file_results = []
         for local_path, dest in manifest:
-            local_h = self._local_md5(local_path)
             self._logger.debug("Deploying %s → %s", os.path.basename(local_path), dest)
-            self._transport.upload(local_path, dest)
-            self._clean_pycache(dest)
-
-            remote_h = self._remote_md5(dest)
-            if remote_h != local_h:
-                raise DeployError(
-                    f"Hash mismatch for {os.path.basename(dest)}: local={local_h} remote={remote_h}",
-                    artifact=dest,
-                )
+            local_h = self.upload_file(local_path, dest)
             file_results.append({"file": os.path.basename(dest), "hash": local_h})
 
         restarted = False
@@ -425,17 +421,7 @@ class DeployMixin:
 
         file_results = []
         for local_path, dest in manifest:
-            local_h = self._local_md5(local_path)
-            self._transport.upload(local_path, dest)
-            self._clean_pycache(dest)
-
-            remote_h = self._remote_md5(dest)
-            if remote_h != local_h:
-                raise DeployError(
-                    f"Hash mismatch for {os.path.basename(dest)}: "
-                    f"local={local_h} remote={remote_h}",
-                    artifact=dest,
-                )
+            local_h = self.upload_file(local_path, dest)
             file_results.append({"file": os.path.basename(dest), "hash": local_h})
 
         return DeployResult(

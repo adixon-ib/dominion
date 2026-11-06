@@ -131,6 +131,10 @@ class NiosContainer(DeployMixin):
         self._clean_pycache(dest)
         remote_h = self._remote_md5(dest)
         self._emit_sh(f"upload {src} -> {dest}", 0, f"{remote_h}  {dest}\n", "")
+        if remote_h is None:
+            raise DeployError(
+                f"md5sum failed or file missing: {dest}", artifact=dest,
+            )
         if remote_h != local_h:
             raise DeployError(
                 f"Hash mismatch for {os.path.basename(dest)}: "
@@ -217,6 +221,16 @@ class NiosContainer(DeployMixin):
         return ip
 
     INFOBLOX_LOG = "/infoblox/var/infoblox.log"
+    REPORT_LOG_LINES = 200  # lines of a dumped log kept in the on_call record
+
+    @classmethod
+    def _cap_for_report(cls, text: str, dest: Path) -> str:
+        lines = text.splitlines(keepends=True)
+        if len(lines) <= cls.REPORT_LOG_LINES:
+            return text
+        more = len(lines) - cls.REPORT_LOG_LINES
+        note = f"... {more} more lines, full log in {dest}\n"
+        return note + "".join(lines[-cls.REPORT_LOG_LINES:])
 
     def mark_log(self, log_path: str) -> LogMark:
         _, stdout, _ = self._transport.run(f"wc -l {shlex.quote(log_path)}")
@@ -253,7 +267,7 @@ class NiosContainer(DeployMixin):
             dest = dest / Path(log_path).name
         cmd = self._build_log_cmd(log_path, since, grep, fixed)
         rc, stdout, stderr = self._transport.run(cmd, check=False, quiet=True)
-        self._emit_sh(cmd, rc, stdout, stderr)
+        self._emit_sh(cmd, rc, self._cap_for_report(stdout, dest), stderr)
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_text(stdout)
         self._logger.info("Log dumped to %s (%d bytes)", dest, len(stdout))

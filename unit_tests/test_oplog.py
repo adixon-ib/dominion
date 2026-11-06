@@ -25,6 +25,8 @@ UPLOAD = (
     + "ipc:bundle rid=bac4b248 user=admin fn=upload outcome=ok dur=12.567s"
 )
 LINES = [REJECT, STEP, STAGED, UPLOAD]
+N_VIOLATIONS = 4
+N_UNTAGGED = 2
 
 
 def run(check):
@@ -166,7 +168,7 @@ def test_contract_flags_each_violation():
     tb = STEP + ' tb="Traceback"'
     c, _ = run(lambda c: c.oplog_contract(
         [leak, other, badrid, tb], caller_file="token_bundle.py", secrets=[token]))
-    assert len(c.failures) == 4
+    assert len(c.failures) == N_VIOLATIONS
     assert c.failures[0].startswith("all 4 lines from token_bundle.py")
     assert other in c.failures[0]
     assert c.failures[1].startswith("rid: all 4")
@@ -177,7 +179,7 @@ def test_contract_flags_each_violation():
 def test_contract_line_without_tag_is_a_violation():
     c, _ = run(lambda c: c.oplog_contract(
         ["plain line"], caller_file="token_bundle.py"))
-    assert len(c.failures) == 2  # caller file and rid
+    assert len(c.failures) == N_UNTAGGED  # caller file and rid
 
 
 def test_checks_record_into_the_sink():
@@ -188,3 +190,21 @@ def test_checks_record_into_the_sink():
 def test_empty_contract_has_nothing_to_flag():
     c, _ = run(lambda c: c.oplog_contract([], caller_file="token_bundle.py"))
     assert not c.failures
+
+
+def test_tag_argument_selects_the_tag_in_every_check():
+    swap = [x.replace("ipc:bundle ", "other:tag ") for x in LINES]
+    c, _ = run(lambda c: c.oplog_summary(
+        swap, fn="upload", outcome="ok", tag="other:tag"))
+    assert not c.failures
+    c, _ = run(lambda c: c.oplog_step(swap, "bac4b248", "ValidateTokens",
+                                      tag="other:tag"))
+    assert not c.failures
+    c, _ = run(lambda c: c.oplog_event(swap, "bac4b248", "staged",
+                                       tag="other:tag", total=999999999))
+    assert not c.failures
+    c, _ = run(lambda c: c.oplog_contract(swap, caller_file="token_bundle.py",
+                                          tag="other:tag"))
+    assert not c.failures
+    c, _ = run(lambda c: c.oplog_summary(swap, fn="upload", outcome="ok"))
+    assert c.failures  # default tag finds nothing

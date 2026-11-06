@@ -73,12 +73,12 @@ def _expect_dur(c, label: str, f: dict) -> None:
 
 def check_summary(  # noqa: PLR0913
     c, lines, *, fn: str, outcome: str, code_suffix: str | None = None,
-    user: str | None = None,
+    user: str | None = None, tag: str = TAG,
 ) -> Line:
     """Exactly one summary line for fn. Checks outcome, rid, dur, and user
     (when given). With code_suffix: code ends with it and reason is non-empty."""
     label = f"summary fn={fn}"
-    s = _one(c, label, [x for x in parse(lines) if x.fields.get("fn") == fn])
+    s = _one(c, label, [x for x in parse(lines, tag) if x.fields.get("fn") == fn])
     f = s.fields
     c.expect(f"{label}: outcome", outcome, f.get("outcome"))
     _expect_rid(c, label, f)
@@ -92,21 +92,25 @@ def check_summary(  # noqa: PLR0913
     return s
 
 
-def check_step(c, lines, rid: str, name: str) -> Line:
+def check_step(c, lines, rid: str, name: str, *, tag: str = TAG) -> Line:
     """Exactly one step=name line of request rid, outcome ok, with a duration."""
     label = f"step={name} rid={rid}"
-    s = _one(c, label, [x for x in parse(lines)
-                        if x.fields.get("rid") == rid and x.fields.get("step") == name])
+    s = _one(c, label, [
+        x for x in parse(lines, tag)
+        if x.fields.get("rid") == rid and x.fields.get("step") == name
+    ])
     c.expect(f"step={name}: outcome", "ok", s.fields.get("outcome"))
     _expect_dur(c, f"step={name}", s.fields)
     return s
 
 
-def check_event(c, lines, rid: str, name: str, **want) -> Line:
+def check_event(
+    c, lines, rid: str, name: str, *, tag: str = TAG, **want,
+) -> Line:
     """Exactly one event=name line of request rid. Each key in want must equal
     the str() of the given value."""
     ev = _one(c, f"event={name} rid={rid}", [
-        x for x in parse(lines)
+        x for x in parse(lines, tag)
         if x.fields.get("rid") == rid and x.fields.get("event") == name
     ])
     for key, value in want.items():
@@ -114,10 +118,12 @@ def check_event(c, lines, rid: str, name: str, **want) -> Line:
     return ev
 
 
-def check_contract(c, lines, *, caller_file: str, secrets: Iterable[str] = ()) -> None:
+def check_contract(
+    c, lines, *, caller_file: str, secrets: Iterable[str] = (), tag: str = TAG,
+) -> None:
     """Over all lines: written by caller_file, rid format, no secret and no
     tb= (traceback) field. One check each; got is the list of offending lines."""
-    rows = parse(lines)
+    rows = parse(lines, tag)
     chunks = [s.split()[0][:SECRET_CHUNK] for s in secrets if s.split()]
     n = len(rows)
     c.expect(f"all {n} lines from {caller_file}", [],

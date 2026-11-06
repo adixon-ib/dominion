@@ -115,19 +115,23 @@ class Checks:
         """expect() an HTTP status, with the start of the body in the label."""
         self.expect(f"{label}: HTTP status (body {str(body)[:200]!r})", want, status)
 
-    def oplog_summary(self, lines, **kw) -> oplog.Line:
+    def oplog_summary(self, lines, *, tag: str = oplog.TAG, **kw) -> oplog.Line:
         """See oplog.check_summary: fn=, outcome=, code_suffix=, user=."""
-        return oplog.check_summary(self, lines, **kw)
+        return oplog.check_summary(self, lines, tag=tag, **kw)
 
-    def oplog_step(self, lines, rid: str, name: str) -> oplog.Line:
-        return oplog.check_step(self, lines, rid, name)
+    def oplog_step(
+        self, lines, rid: str, name: str, *, tag: str = oplog.TAG,
+    ) -> oplog.Line:
+        return oplog.check_step(self, lines, rid, name, tag=tag)
 
-    def oplog_event(self, lines, rid: str, name: str, **want) -> oplog.Line:
-        return oplog.check_event(self, lines, rid, name, **want)
+    def oplog_event(
+        self, lines, rid: str, name: str, *, tag: str = oplog.TAG, **want,
+    ) -> oplog.Line:
+        return oplog.check_event(self, lines, rid, name, tag=tag, **want)
 
-    def oplog_contract(self, lines, **kw) -> None:
+    def oplog_contract(self, lines, *, tag: str = oplog.TAG, **kw) -> None:
         """See oplog.check_contract: caller_file=, secrets=."""
-        oplog.check_contract(self, lines, **kw)
+        oplog.check_contract(self, lines, tag=tag, **kw)
 
     def __enter__(self):
         return self

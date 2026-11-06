@@ -67,16 +67,17 @@ class _BaseTransport:
         timeout: int | None = None,
         quiet: bool = False,
     ) -> tuple[int, str, str]:
+        timeout = timeout if timeout is not None else self.timeout
         try:
             result = subprocess.run(
                 argv,
                 capture_output=True,
-                timeout=timeout or self.timeout,
+                timeout=timeout,
                 input=stdin_data,
             )
         except subprocess.TimeoutExpired as exc:
             raise TransportError(
-                f"Command timed out after {timeout or self.timeout}s: {' '.join(argv)}"
+                f"Command timed out after {timeout}s: {' '.join(argv)}"
             ) from exc
         except FileNotFoundError as exc:
             raise TransportError(f"Command not found: {argv[0]}") from exc
