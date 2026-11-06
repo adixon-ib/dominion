@@ -5,6 +5,7 @@ import contextlib
 import html.parser
 import os
 import re
+import sys
 import types
 
 import pytest
@@ -678,7 +679,8 @@ def test_console_print_is_capped_with_a_pointer(monkeypatch, tmp_path, capsys):
     cap = 100
     assert printed[:cap] == read_nios_log(t).splitlines()[:cap]
     assert printed[cap] == (
-        f"... {total + 1 - cap} more, see {os.path.join(t.output_dir, 'nios_log.log')}"
+        f"... {total + 1 - cap} more file lines, see "
+        f"{os.path.join(t.output_dir, 'nios_log.log')}"
     )
     assert len(read_nios_log(t).splitlines()) == total + 1
 
@@ -700,3 +702,87 @@ def test_write_failure_warns_and_does_not_break_the_run(monkeypatch, tmp_path):
     assert "nios_log.log not written: RuntimeError: builder bug" in text
     assert os.path.exists(os.path.join(t.output_dir, "junit.xml"))
     assert "NIOS log:" not in text
+
+
+# Real captures of NIOS-111696-oplog (vm-48-10, 2026-11-06): nios_log/1..5.log, and
+# the same lines in oplog.log. The builder must reproduce oplog.log from the
+# captures, in order.
+REAL_CAPTURES = [
+    """\
+[2026/11/06 21:35:53.524] (2321081 /usr/bin/httpd) one/token_bundle.py:217 apply(): ipc:bundle rid=da8bd471 user=admin fn=apply outcome=rejected code=one.token_bundle.NOT_ENABLED reason="IPc mode is not enabled. Use the enable function to enable it." dur=0.000s
+""".splitlines(),  # noqa: E501
+    """\
+[2026/11/06 21:36:25.684] (2321082 /usr/bin/httpd) one/token_bundle.py:186 upload(): ipc:bundle rid=52ee3558 step=ValidateTokens outcome=ok dur=20.705s
+[2026/11/06 21:36:25.684] (2321082 /usr/bin/httpd) one/token_bundle.py:203 upload(): ipc:bundle rid=52ee3558 event=staged uid=4c30757df13b4c88bd8284d43fca2b06 start=2026-04-17 expiry=2029-09-17 total=999999999
+[2026/11/06 21:36:25.684] (2321082 /usr/bin/httpd) one/token_bundle.py:175 upload(): ipc:bundle rid=52ee3558 user=admin fn=upload outcome=ok dur=20.705s
+[2026/11/06 21:36:26.012] (2321081 /usr/bin/httpd) one/token_bundle.py:261 enable(): ipc:bundle rid=0f498b0b step=InitTokenMigration outcome=ok dur=0.003s
+[2026/11/06 21:36:26.012] (2321081 /usr/bin/httpd) one/token_bundle.py:264 enable(): ipc:bundle rid=0f498b0b event=migration_queued overall_status=NOT_STARTED
+[2026/11/06 21:36:26.012] (2321081 /usr/bin/httpd) one/token_bundle.py:243 enable(): ipc:bundle rid=0f498b0b user=admin fn=enable outcome=ok dur=0.007s
+""".splitlines(),  # noqa: E501
+    """\
+[2026/11/06 21:36:59.811] (2321108 /usr/bin/httpd) one/token_bundle.py:232 apply(): ipc:bundle rid=821c9524 step=handle_update_token_migration outcome=ok dur=21.651s
+[2026/11/06 21:36:59.811] (2321108 /usr/bin/httpd) one/token_bundle.py:238 apply(): ipc:bundle rid=821c9524 event=applied uid=4c30757df13b4c88bd8284d43fca2b06 start=2026-04-17 expiry=2029-09-17 total=999999999
+[2026/11/06 21:36:59.811] (2321108 /usr/bin/httpd) one/token_bundle.py:217 apply(): ipc:bundle rid=821c9524 user=admin fn=apply outcome=ok dur=21.654s
+""".splitlines(),  # noqa: E501
+    """\
+""".splitlines(),
+    """\
+[2026/11/06 21:37:18.642] (2321108 /usr/bin/httpd) one/token_bundle.py:175 upload(): ipc:bundle rid=456590f6 user=admin fn=upload outcome=rejected code=one.token_bundle.ALREADY_ENABLED reason="IPc mode already enabled." dur=0.000s
+""".splitlines(),  # noqa: E501
+]
+
+REAL_OPLOG = """\
+[2026/11/06 21:35:53.524] (2321081 /usr/bin/httpd) one/token_bundle.py:217 apply(): ipc:bundle rid=da8bd471 user=admin fn=apply outcome=rejected code=one.token_bundle.NOT_ENABLED reason="IPc mode is not enabled. Use the enable function to enable it." dur=0.000s
+[2026/11/06 21:36:25.684] (2321082 /usr/bin/httpd) one/token_bundle.py:186 upload(): ipc:bundle rid=52ee3558 step=ValidateTokens outcome=ok dur=20.705s
+[2026/11/06 21:36:25.684] (2321082 /usr/bin/httpd) one/token_bundle.py:203 upload(): ipc:bundle rid=52ee3558 event=staged uid=4c30757df13b4c88bd8284d43fca2b06 start=2026-04-17 expiry=2029-09-17 total=999999999
+[2026/11/06 21:36:25.684] (2321082 /usr/bin/httpd) one/token_bundle.py:175 upload(): ipc:bundle rid=52ee3558 user=admin fn=upload outcome=ok dur=20.705s
+[2026/11/06 21:36:26.012] (2321081 /usr/bin/httpd) one/token_bundle.py:261 enable(): ipc:bundle rid=0f498b0b step=InitTokenMigration outcome=ok dur=0.003s
+[2026/11/06 21:36:26.012] (2321081 /usr/bin/httpd) one/token_bundle.py:264 enable(): ipc:bundle rid=0f498b0b event=migration_queued overall_status=NOT_STARTED
+[2026/11/06 21:36:26.012] (2321081 /usr/bin/httpd) one/token_bundle.py:243 enable(): ipc:bundle rid=0f498b0b user=admin fn=enable outcome=ok dur=0.007s
+[2026/11/06 21:36:59.811] (2321108 /usr/bin/httpd) one/token_bundle.py:232 apply(): ipc:bundle rid=821c9524 step=handle_update_token_migration outcome=ok dur=21.651s
+[2026/11/06 21:36:59.811] (2321108 /usr/bin/httpd) one/token_bundle.py:238 apply(): ipc:bundle rid=821c9524 event=applied uid=4c30757df13b4c88bd8284d43fca2b06 start=2026-04-17 expiry=2029-09-17 total=999999999
+[2026/11/06 21:36:59.811] (2321108 /usr/bin/httpd) one/token_bundle.py:217 apply(): ipc:bundle rid=821c9524 user=admin fn=apply outcome=ok dur=21.654s
+[2026/11/06 21:37:18.642] (2321108 /usr/bin/httpd) one/token_bundle.py:175 upload(): ipc:bundle rid=456590f6 user=admin fn=upload outcome=rejected code=one.token_bundle.ALREADY_ENABLED reason="IPc mode already enabled." dur=0.000s
+"""  # noqa: E501
+
+
+def test_builder_reproduces_the_real_oplog_from_the_real_captures():
+    sections = [
+        {"name": f"{i}. phase", "status": "PASS", "duration": 1.0, "state": None,
+         "logs": [{"pattern": "ipc:bundle ", "lines": cap, "path": ""}]}
+        for i, cap in enumerate(REAL_CAPTURES, 1)
+    ]
+    text, count = ticket_mod._nios_log_text(sections)
+    body = [ln for ln in text.splitlines() if ln and not ln.startswith("== ")]
+    assert body == REAL_OPLOG.splitlines()
+    assert count == len(REAL_OPLOG.splitlines())
+    assert "== 4. phase | PASS 1.0s | 0 lines" in text
+
+
+def test_leading_untimestamped_line_sorts_first_in_its_group():
+    lines = ["no stamp", "[2026/11/06 10:00:00.002] b", "[2026/11/06 10:00:00.001] a"]
+    assert ticket_mod._chronological(lines) == [
+        "no stamp", "[2026/11/06 10:00:00.001] a", "[2026/11/06 10:00:00.002] b",
+    ]
+
+
+def test_a_failing_print_cannot_mask_the_exit_code_or_skip_the_restore(
+    monkeypatch, tmp_path,
+):
+    monkeypatch.setattr(FakeApp, "script", [[UP_STEP]])
+    before = sys.stdout
+
+    def body(t):
+        c = t.phase("1. connect", t.connect)
+        t.phase("2. log", lambda: capture(t), needs=c)
+
+    def bad_print(self):
+        raise BrokenPipeError("closed")
+
+    monkeypatch.setattr(Ticket, "_print_nios_log", bad_print)
+    t = make(tmp_path)
+    with pytest.raises(SystemExit) as exc, t:
+        body(t)
+    assert exc.value.code == 0
+    assert sys.stdout is before
+    assert t._logfile.closed

@@ -159,7 +159,7 @@ STAMP_RE = re.compile(r"^\[(\d{4}/\d\d/\d\d \d\d:\d\d:\d\d\.\d{3})\]")
 
 def _chronological(lines: list[str]) -> list[str]:
     """Stable sort by the infoblox.log timestamp. A line without one sorts with
-    the line before it, so it keeps its place."""
+    the line before it, so it keeps its place; a leading one sorts first."""
     keyed, key = [], ""
     for line in lines:
         m = STAMP_RE.match(line)
@@ -612,10 +612,20 @@ class Ticket:
             self._write_html()
             self.run.summary(extra=self._extra(), _allow_no_target=True)
         finally:
-            self._print_nios_log()
-            _rebind_log_handlers(sys.stderr, old_err)
-            sys.stdout, sys.stderr = old_out, old_err
-            self._logfile.close()
+            try:
+                try:
+                    self._print_nios_log()
+                except Exception as e:
+                    with contextlib.suppress(Exception):
+                        self._log.warning(
+                            "nios_log.log not printed: %s: %s", type(e).__name__, e,
+                        )
+            finally:
+                try:
+                    _rebind_log_handlers(sys.stderr, old_err)
+                finally:
+                    sys.stdout, sys.stderr = old_out, old_err
+                    self._logfile.close()
 
     def _run_cleanups(self) -> None:
         several = len(self._cleanups) > 1
@@ -691,7 +701,7 @@ class Ticket:
         print("\n".join(lines[:NIOS_LOG_CONSOLE_LINES]))
         more = len(lines) - NIOS_LOG_CONSOLE_LINES
         if more > 0:
-            print(f"... {more} more, see "
+            print(f"... {more} more file lines, see "
                   f"{os.path.join(self.output_dir, NIOS_LOG_FILE)}")
 
     def _write_html(self) -> None:
