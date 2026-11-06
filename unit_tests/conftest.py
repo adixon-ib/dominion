@@ -125,6 +125,15 @@ class FakeTransport:
         return self.container_running
 
 
+@pytest.fixture(autouse=True)
+def no_ssh_rate_limit_command(monkeypatch):
+    """NiosContainer.__init__ runs iptables and touch in the container through its
+    transport. A test that builds a container over a real transport would reach
+    a real docker or ssh host: never."""
+    from dominion.src.container import NiosContainer
+    monkeypatch.setattr(NiosContainer, "_disable_ssh_rate_limit", lambda self: None)
+
+
 @pytest.fixture
 def fake_transport() -> FakeTransport:
     return FakeTransport()
