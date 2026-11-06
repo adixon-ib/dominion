@@ -1,25 +1,108 @@
 """Unit tests for report.html: Ticket writes it next to report.md from the same
-section data. Reuses the fakes of test_ticket."""
+section data. Minimal local fakes, independent of the other test modules."""
 
 import contextlib
+import html.parser
 import os
 import re
+import types
 
+import pytest
+
+import dominion.src.ticket as ticket_mod
+from dominion import Appliance, LogDump, LogMark, Ticket
 from dominion.src import report_html
-from dominion.unit_tests.test_oplog import REJECT
-from dominion.unit_tests.test_ticket import (  # noqa: F401  (fake_lab is autouse)
-    Box,
-    FakeApp,
-    boom,
-    fake_lab,
-    make,
-    read_report,
-    run_ticket,
+
+REJECT = (
+    "[2026/11/06 19:07:00.277] (1962173 /usr/bin/httpd) one/token_bundle.py:217 "
+    "apply(): ipc:bundle rid=6a0638b9 user=admin fn=apply outcome=rejected "
+    'code=one.token_bundle.NOT_ENABLED reason="IPc mode is not enabled." dur=0.000s'
 )
 
 
+class FakeContainer:
+    def __init__(self, app):
+        self.app = app
+
+    def sh(self, cmd, check=True):
+        if self.app.on_call:
+            self.app.on_call(
+                {"kind": "sh", "cmd": cmd, "rc": 0, "stdout": "out\n", "stderr": ""},
+            )
+        return 0, "out\n", ""
+
+
+class FakeApp:
+    log_lines = ("old rid=0\n", "new ipc:bundle rid=1\n", "new other\n")
+
+    def __init__(self, cfg):
+        self.hostname = cfg.hostname
+        self.wapi_version = None
+        self.on_call = None
+        self.container = FakeContainer(self)
+
+    @contextlib.contextmanager
+    def console_session(self):
+        yield types.SimpleNamespace(run=lambda cmd: "Version : 9.0.7-12345\n")
+
+    def mark_infoblox_log(self):
+        return LogMark(log_path="/ib.log", line_count=1)
+
+    def dump_infoblox_log(self, dest, since=None, grep=None, fixed=False):
+        rows = [r for r in self.log_lines[since.line_count:] if grep in r]
+        text = "".join(rows)
+        os.makedirs(os.path.dirname(dest), exist_ok=True)
+        with open(dest, "w") as f:
+            f.write(text)
+        return LogDump(path=dest, text=text)
+
+    def __str__(self):
+        return self.hostname
+
+
+@pytest.fixture(autouse=True)
+def fake_lab(monkeypatch):
+    monkeypatch.setattr(ticket_mod, "lab_network", lambda h: ("10.0.0.9", "m", "g"))
+    monkeypatch.setattr(
+        Appliance, "from_config", classmethod(lambda cls, cfg: FakeApp(cfg)),
+    )
+
+
+class Box:
+    def __init__(self, state="Licenses"):
+        self.state = state
+
+    def probe(self):
+        return self.state
+
+    def to(self, state):
+        def fn():
+            self.state = state
+        return fn
+
+
+def boom():
+    raise ValueError("boom")
+
+
+def make(tmp_path, **kw):
+    return Ticket("NIOS-1", "vm-1", results_dir=str(tmp_path), **kw)
+
+
+def run_ticket(t, body):
+    with pytest.raises(SystemExit) as exc, t:
+        body(t)
+    with open(os.path.join(t.output_dir, "summary.txt")) as f:
+        return exc.value.code, f.read()
+
+
+def read_report(t):
+    with open(os.path.join(t.output_dir, "report.md"), encoding="utf-8") as f:
+        return f.read()
+
+
 def read_html(t):
-    with open(os.path.join(t.output_dir, "report.html")) as f:
+    with open(os.path.join(t.output_dir, "report.html"), encoding="utf-8") as f:
         return f.read()
 
 
@@ -263,3 +346,162 @@ def test_report_md_is_unchanged_by_the_html_report(monkeypatch, tmp_path):
     with_html = md_of("html")
     monkeypatch.setattr(report_html, "render", lambda t: "x")
     assert md_of("no_html") == with_html
+
+
+class _Balance(html.parser.HTMLParser):
+    VOID = frozenset({"meta", "br", "hr", "img", "link", "input"})
+
+    def __init__(self):
+        super().__init__()
+        self.stack, self.errors = [], []
+
+    def handle_starttag(self, tag, attrs):
+        if tag not in self.VOID:
+            self.stack.append(tag)
+
+    def handle_endtag(self, tag):
+        if not self.stack or self.stack.pop() != tag:
+            self.errors.append(tag)
+
+
+def test_page_is_well_formed_with_every_card_kind(monkeypatch, tmp_path):
+    lines = ("old\n", REJECT + "\n", "ipc:bundle x\n")
+    monkeypatch.setattr(FakeApp, "log_lines", lines)
+    box = Box()
+
+    def body(t):
+        t.warn("w")
+        t.note("n")
+        c = t.phase("1. connect", t.connect)
+
+        def work():
+            t.container.sh("ls")
+            with t.nios_log("ipc:bundle "):
+                pass
+            with t.checks("c") as ck:
+                ck.expect("a", 1, 1)
+                ck.expect("b", 1, 2)
+
+        t.phase("2. work", work, needs=c)
+        t.steps([("3. up", "Licenses", "IPc", boom), ("4. no", "X", "Y", boom)],
+                probe=box.probe, needs=c, home=("home", "Licenses", box.to("Licenses")))
+
+    t = make(tmp_path, state={"k": 1})
+    run_ticket(t, body)
+    p = _Balance()
+    p.feed(read_html(t))
+    p.close()
+    assert p.errors == []
+    assert p.stack == []
+
+
+def test_outcome_cannot_inject_attributes(monkeypatch, tmp_path):
+    evil = ('ipc:bundle rid=aaaaaaaa fn=apply outcome="x\\" onmouseover=\\"alert(1)" '
+            "dur=0.000s")
+    monkeypatch.setattr(FakeApp, "log_lines", ("old\n", evil + "\n"))
+    t = make(tmp_path)
+
+    def body(t):
+        c = t.phase("1. connect", t.connect)
+
+        def work():
+            with t.nios_log("ipc:bundle "):
+                pass
+
+        t.phase("2. log", work, needs=c)
+
+    run_ticket(t, body)
+    page = read_html(t)
+    assert 'class="logline o-other"' in page
+
+    names = set()
+
+    class Attrs(html.parser.HTMLParser):
+        def handle_starttag(self, tag, attrs):
+            names.update(n for n, _ in attrs)
+
+    Attrs().feed(page)
+    assert not {n for n in names if n.startswith("on")}
+
+
+def test_capture_is_capped_to_last_200_lines_with_a_pointer_to_the_file(
+    monkeypatch, tmp_path,
+):
+    total = 250
+    rows = tuple(f"ipc:bundle row{i}\n" for i in range(total))
+    monkeypatch.setattr(FakeApp, "log_lines", ("old\n", *rows))
+    t = make(tmp_path)
+
+    def body(t):
+        c = t.phase("1. connect", t.connect)
+
+        def work():
+            with t.nios_log("ipc:bundle "):
+                pass
+
+        t.phase("2. log", work, needs=c)
+
+    run_ticket(t, body)
+    page = read_html(t)
+    assert "(250 lines)" in page
+    assert "... 50 more lines, see nios_log/1.log" in page
+    assert "row49<" not in page
+    assert "row50<" in page
+    assert "row249<" in page
+    with open(os.path.join(t.output_dir, "nios_log", "1.log")) as f:
+        assert f.read().count("\n") == total
+
+
+def test_short_capture_has_no_more_lines_note(tmp_path):
+    t = make(tmp_path)
+
+    def body(t):
+        c = t.phase("1. connect", t.connect)
+
+        def work():
+            with t.nios_log("ipc:bundle "):
+                pass
+
+        t.phase("2. log", work, needs=c)
+
+    run_ticket(t, body)
+    assert "more lines" not in read_html(t)
+
+
+def test_nested_phase_capture_is_attributed_to_its_own_section(tmp_path):
+    t = make(tmp_path)
+
+    def body(t):
+        c = t.phase("1. connect", t.connect)
+
+        def inner():
+            with t.nios_log("ipc:bundle "):
+                pass
+
+        def outer():
+            with t.nios_log("other"):
+                pass
+            t.phase("3. inner", inner)
+
+        t.phase("2. outer", outer, needs=c)
+
+    run_ticket(t, body)
+    page = read_html(t)
+    cards = page.split('<section class="card">')
+    by_name = {re.search(r"<span>(.*?)</span>", c).group(1): c for c in cards[1:]
+               if "<h2><span>" in c}
+    assert "infoblox.log: other " in by_name["2. outer"]
+    assert "infoblox.log: ipc:bundle " not in by_name["2. outer"]
+    assert "infoblox.log: ipc:bundle " in by_name["3. inner"]
+    assert "infoblox.log: other" not in by_name["3. inner"]
+
+
+def test_reports_are_written_as_utf8(tmp_path):
+    t = make(tmp_path)
+
+    def body(t):
+        t.note("caf\u00e9 \u2713")
+
+    run_ticket(t, body)
+    assert "caf\u00e9 \u2713" in read_html(t)
+    assert "caf\u00e9 \u2713" in read_report(t)

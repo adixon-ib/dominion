@@ -2,7 +2,9 @@
 
 render(ticket) builds it from the same section data as report.md. Inline CSS
 only, no JS and no external assets, light and dark via prefers-color-scheme.
-Every piece of text is escaped.
+Every piece of text is escaped. Each nios_log capture shows at most its last
+200 lines, the full text is in its nios_log/N.log file. Highlighting of log lines
+is specific to the oplog tag (oplog.TAG); other lines are shown as plain text.
 """
 
 from __future__ import annotations
@@ -11,7 +13,16 @@ import html
 import os
 
 from . import oplog
-from .ticket import PACKAGE_DIR, _collapse, _dump, _fmt, _git_rev, _show
+from .container import NiosContainer
+from .ticket import (
+    PACKAGE_DIR,
+    _collapse,
+    _dump,
+    _fmt,
+    _git_rev,
+    _show,
+    _state_text,
+)
 
 CSS = """
 :root{--bg:#f6f7f9;--card:#fff;--fg:#1c2128;--muted:#667085;--line:#d8dee6;
@@ -69,14 +80,6 @@ def _e(v) -> str:
     return html.escape(str(v))
 
 
-def _state_text(s: dict) -> str:
-    path = f"-> {_fmt(s['to'])}"
-    if "from" in s:
-        path = f"{_fmt(s['from'])} {path}"
-    probed = ", ".join(f"{k}: {_fmt(s[k])}" for k in ("before", "after") if k in s)
-    return f"{path} (probed {probed})" if probed else path
-
-
 def _log_line(raw: str) -> str:
     line = oplog.parse([raw])[0]
     f = line.fields
@@ -93,18 +96,25 @@ def _log_line(raw: str) -> str:
     for key in ("rid", "dur"):
         if key in f:
             badges.append(f'<span class="badge muted">{key} {_e(f[key])}</span>')
-    box = f"logline o-{outcome}" if outcome else "logline"
-    return (f'<div class="{box}">{"".join(badges)}'
+    kind = outcome if outcome in ("ok", "rejected", "error") else "other"
+    box = f"logline o-{kind}" if outcome else "logline"
+    return (f'<div class="{_e(box)}">{"".join(badges)}'
             f'<code class="raw">{_e(raw)}</code></div>')
 
 
-def _logs(logs: list[dict]) -> str:
+def _logs(logs: list[dict], output_dir: str) -> str:
+    keep = NiosContainer.REPORT_LOG_LINES
     out = []
     for cap in logs:
-        n = len(cap["lines"])
+        lines = cap["lines"]
+        n = len(lines)
         out.append(f'<div class="label">infoblox.log: {_e(cap["pattern"])} '
                    f'({n} line{"" if n == 1 else "s"})</div>')
-        out += [_log_line(raw) for raw in cap["lines"]] or [
+        if n > keep:
+            where = os.path.relpath(cap["path"], output_dir) if cap.get("path") else ""
+            note = f"... {n - keep} more lines" + (f", see {where}" if where else "")
+            out.append(f'<div class="muted">{_e(note)}</div>')
+        out += [_log_line(raw) for raw in lines[-keep:]] or [
             '<div class="muted">no matching lines</div>'
         ]
     return "".join(out)
@@ -149,7 +159,7 @@ def _calls(calls: list[dict]) -> str:
     return f"<details><summary>Calls ({len(calls)})</summary>{body}</details>"
 
 
-def _card(sec: dict) -> str:
+def _card(sec: dict, output_dir: str) -> str:
     dur = "" if sec["status"] == "SKIP" else f'{sec["duration"]:.1f}s'
     parts = [
         f'<section class="card"><h2><span>{_e(sec["name"])}</span>'
@@ -169,7 +179,7 @@ def _card(sec: dict) -> str:
         parts.append(f'<div class="label">Error</div>'
                      f'<pre class="error">{_e(sec["error"])}</pre>')
     if sec.get("logs"):
-        parts.append(_logs(sec["logs"]))
+        parts.append(_logs(sec["logs"], output_dir))
     if sec["calls"]:
         parts.append(_calls(sec["calls"]))
     return "".join(parts) + "</section>"
@@ -191,7 +201,7 @@ def render(t) -> str:
         + "".join(f"<dt>{k}</dt><dd>{_e(v)}</dd>" for k, v in meta)
         + "</dl></header>"
     )
-    body = [head] + [_card(s) for s in t._sections]
+    body = [head] + [_card(s, t.output_dir) for s in t._sections]
     state = sorted(vars(t.state).items())
     if state:
         items = "".join(f"<li>{_e(k)}: <code>{_e(_show(v))}</code></li>"

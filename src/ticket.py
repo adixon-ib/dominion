@@ -161,12 +161,16 @@ class NiosLog:
     line_count: int = 0  # infoblox.log length at entry
 
 
-def _state_line(s: dict) -> str:
+def _state_text(s: dict) -> str:
     path = f"-> {_fmt(s['to'])}"
     if "from" in s:
         path = f"{_fmt(s['from'])} {path}"
     probed = ", ".join(f"{k}: {_fmt(s[k])}" for k in ("before", "after") if k in s)
-    return f"State: {path}" + (f" (probed {probed})" if probed else "")
+    return path + (f" (probed {probed})" if probed else "")
+
+
+def _state_line(s: dict) -> str:
+    return f"State: {_state_text(s)}"
 
 
 def _fence(text: str, lang: str = "") -> str:
@@ -348,7 +352,7 @@ class Ticket:
             nl.lines = dump.lines
             if self._current is not None:
                 self._current["logs"].append(
-                    {"pattern": pattern, "lines": list(nl.lines)}
+                    {"pattern": pattern, "lines": list(nl.lines), "path": dest}
                 )
 
     def _skip(
@@ -624,7 +628,8 @@ class Ticket:
         try:
             from .report_html import render
             page = render(self)
-            with open(os.path.join(self.output_dir, "report.html"), "w") as f:
+            path = os.path.join(self.output_dir, "report.html")
+            with open(path, "w", encoding="utf-8") as f:
                 f.write(page)
         except Exception as e:
             self.warn(f"report.html not written: {type(e).__name__}: {e}")
@@ -671,5 +676,6 @@ class Ticket:
         for title, items in (("Warnings", self._warnings), ("Notes", self._notes)):
             if items:
                 lines += ["", f"## {title}", *[f"- {i}" for i in items]]
-        with open(os.path.join(self.output_dir, "report.md"), "w") as f:
+        path = os.path.join(self.output_dir, "report.md")
+        with open(path, "w", encoding="utf-8") as f:
             f.write("\n".join(lines) + "\n")
