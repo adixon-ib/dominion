@@ -7,6 +7,7 @@ complete operation (enable token mode, join a member to a grid, etc.).
 """
 
 from .appliance_reset_all import reset_all
+from .coverage import CoverageResult, coverage_off, coverage_on
 from .grid_join import join_grid
 from .grid_leave import leave_grid
 from .ipc_ticket import IPC, LICENSES, IpcTicketTest
@@ -22,7 +23,10 @@ __all__ = [
     "BUNDLE_OBJECT",
     "IPC",
     "LICENSES",
+    "CoverageResult",
     "IpcTicketTest",
+    "coverage_off",
+    "coverage_on",
     "enable_token_mode",
     "enable_token_mode_wapi",
     "join_grid",

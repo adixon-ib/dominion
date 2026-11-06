@@ -307,6 +307,20 @@ class DeployMixin:
             restarted=restarted,
         )
 
+    # -- admin-httpd -------------------------------------------------------
+
+    def stop_admin_httpd(self) -> None:
+        self._transport.run(
+            "/infoblox/one/bin/pmc command stop admin-httpd 2>/dev/null || true",
+            check=False,
+        )
+
+    def start_admin_httpd(self) -> None:
+        self._transport.run(
+            "/infoblox/one/bin/pmc command start admin-httpd 2>/dev/null || true",
+            check=False,
+        )
+
     # -- deploy: token Python files ----------------------------------------
 
     def deploy_token_py(
@@ -376,20 +390,14 @@ class DeployMixin:
 
         restarted = False
         if not skip_restart:
-            self._transport.run(
-                "/infoblox/one/bin/pmc command stop admin-httpd 2>/dev/null || true",
-                check=False,
-            )
+            self.stop_admin_httpd()
             # Don't rely on process_manager to auto-respawn admin-httpd —
             # after repeated stop/start cycles in a short window (e.g.
             # iterating on a hot-deploy loop), it can hit a crash-loop
             # backoff and stop auto-respawning entirely, leaving admin-httpd
             # down until something explicitly starts it again.
             time.sleep(2)
-            self._transport.run(
-                "/infoblox/one/bin/pmc command start admin-httpd 2>/dev/null || true",
-                check=False,
-            )
+            self.start_admin_httpd()
             restarted = True
             self._logger.info("admin-httpd restarted")
 

@@ -32,6 +32,8 @@ Prefer `TicketTest` (`src/ticket_test.py`, exported with `step`) for a ticket wi
 
 NIOS unit tests: `container.run_py_tests(tests, keywords=)` returns a `PyTestResult` (`.ok`, `.tests`, `.ran`), `container.deploy_test_files([worktree subpaths])` uploads test modules, `Ticket.connect_local(container)` targets NCC, `c.py_tests(result)` records them. Never run two `run_py_tests` on one container (the second raises). Never pass `-k` without `--no-check-licenses` or use pytest: the method handles it.
 
+Coverage of the changed lines: `coverage_on(app, include=[...])` before the tests, `coverage_off(app, out_dir, worktree=, base=)` after (`coverage.txt`, `coverage.html` green/red changed hunks, `coverage_html/`, `changed_lines.json`, `coverage.json`). Use `skip_home` on an appliance: `reset_all` removes the hook. Never `rm` the `.pth`: `coverage_off` moves it.
+
 Run harness (`src/harness.py`), for other harness use of dominion: `run = Run()` first, `run.add(target)` for every target, `output_dir=run.output_dir` in every config, `try/finally: run.summary()`. A phase whose prerequisite failed gets `run.skip(name, reason)`. Console expect patterns come from real NIOS output, not guesses. Timeouts are explicit (boot 300s, httpd 45s).
 
 ## Changing the library
