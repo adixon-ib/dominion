@@ -32,6 +32,7 @@ from .src.harness import Run
 from .src.log import LogDump, LogMark, create_logger, resolve_log_file
 from .src.session import ConsoleConnectSession, ConsoleSession, ShellSession
 from .src.ticket import Checks, Ticket
+from .src.ticket_test import TicketTest, step
 from .src.transport import (
     CommandError,
     LocalDockerTransport,
@@ -75,6 +76,7 @@ __all__ = [
     "SSHDockerTransport",
     "ShellSession",
     "Ticket",
+    "TicketTest",
     "TransportError",
     "WapiClient",
     "WapiError",
@@ -83,4 +85,5 @@ __all__ = [
     "reset_console",
     "resolve_log_file",
     "ssh_reachable",
+    "step",
 ]

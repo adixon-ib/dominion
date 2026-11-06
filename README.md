@@ -186,6 +186,32 @@ Helpers for ticket tests:
 - `app.usage_mode()` returns `"Licenses"` or `"IPc"`. `container.upload_file(src, dest)` uploads, cleans stale `.pyc`/`.pys` and verifies the md5 (`DeployError` with both hashes). `app.wapi.request(..., timeout=)` overrides the transport timeout for one call. `patched_bundle` and `upload_bundle_token(app, path)` (in `dominion.actions`) patch the token bundle with the grid's `lpc_uid` and upload it with fileop. `enable_token_mode_wapi` also returns the upload `"token"`. `BUNDLE_OBJECT` (`"ipc:bundle"`) is exported from `dominion.actions`.
 - `container.dump_log` and `count_log` appear under Calls like `sh`. `dump_log(..., fixed=True)` greps a fixed string.
 
+#### TicketTest
+
+`TicketTest` (`src/ticket_test.py`) turns a ticket test into a class: dominion runs `Ticket` and `t.steps`, the ticket supplies the steps. `run()` does phases `1. connect`, `2. deploy` (`deploy_files` md5-checked, then `deploy_groups`, then WAPI ready; skipped when `skip_deploy` or nothing to deploy), `3. preflight` (default: `probe() == home_state`), then each `@step(src, dst, title)` method as `4. <title>`, `5. <title>`, ..., then `home` unless `skip_home`. Steps run in class definition order, inherited steps first; a subclass that redefines a step name keeps the inherited position. Step return values are ignored. Use `self.app`, `self.container`, `self.state`, `self.checks(...)` and `self.nios_log(...)`. `run()` exits the process like `Ticket`. Gates (`skip_deploy`, `skip_home`) are constructor arguments: dominion reads no env vars.
+
+```python
+from dominion.actions import IPC, LICENSES, IpcTicketTest
+from dominion import step
+
+class Oplog(IpcTicketTest):
+    name = "NIOS-111696-oplog"
+    bundle_path = BUNDLE
+    deploy_files = {"products/one/server/src/pyutil/oplog.py": OPLOG_DEST}
+
+    @step(LICENSES, LICENSES, "apply rejected in Licenses mode")
+    def apply_rejected(self):
+        with self.nios_log("ipc:bundle ") as nl:
+            status, body = self.bundle("apply", {"token": self.upload_bundle_token()})
+        with self.checks("apply rejected") as c:
+            c.expect_status("apply", 400, status, body)
+            c.oplog_summary(nl.lines, fn="apply", outcome="rejected", code_suffix="NOT_ENABLED")
+
+Oplog(HOST, worktree=WORKTREE, results_dir=RESULTS_DIR, skip_deploy=SKIP_DEPLOY).run()
+```
+
+Subclass `TicketTest` directly for other boxes: define `name`, `home_state`, `probe()` and `home()`. `IpcTicketTest` (`actions/ipc_ticket.py`) supplies them for IPc: state from `app.usage_mode()`, home with `reset_all`, `deploy_groups={"pyabs"}`, WAPI v2.15. `upload_bundle_token(bundle=None)` uploads the patched bundle (default `bundle_path`) and keeps the token in `self.state.tokens`. `bundle(func, data, timeout=None)` POSTs `ipc:bundle?_function=func` and returns `(status, body)` without raising; `apply` gets a 300s timeout. `initial_state` seeds `self.state` (`IpcTicketTest` uses `{"tokens": []}`). `deploy_required` lists worktree subpaths (relative to `worktree`) that must be files: the deploy phase fails if one is not a file after deploying, or was skipped by `deploy_token_py`; the `deploy_token_py` result is kept in `self.deploy_result`. `bundle_path` is the default bundle for `upload_bundle_token()` and `enable_ipc()` (the action `enable_token_mode_wapi`; it returns the action's result and keeps the upload token in `self.state.tokens`). `deploy_title`, `preflight_title` and `home_title` rename the phases (`2. <deploy_title>`, `3. <preflight_title>`, unnumbered home). Override `preflight()` (and call `super().preflight()`) or `deploy()` for ticket-specific setup.
+
 ### Results
 
 dominion is designed to log every command ran on the appliance. Below is sample output from a run:

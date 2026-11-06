@@ -9,6 +9,7 @@ complete operation (enable token mode, join a member to a grid, etc.).
 from .appliance_reset_all import reset_all
 from .grid_join import join_grid
 from .grid_leave import leave_grid
+from .ipc_ticket import IPC, LICENSES, IpcTicketTest
 from .token_enable import (
     BUNDLE_OBJECT,
     enable_token_mode,
@@ -19,6 +20,9 @@ from .token_enable import (
 
 __all__ = [
     "BUNDLE_OBJECT",
+    "IPC",
+    "LICENSES",
+    "IpcTicketTest",
     "enable_token_mode",
     "enable_token_mode_wapi",
     "join_grid",
