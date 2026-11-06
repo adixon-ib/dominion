@@ -29,12 +29,13 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 
 from . import oplog
-from .appliance import Appliance, lab_network
-from .config import ApplianceConfig
+from .appliance import Appliance, LocalAppliance, lab_network
+from .config import ApplianceConfig, LocalApplianceConfig
 from .constants import WAPI_VERSION
 from .container import NiosContainer
 from .harness import Run
 from .log import create_logger
+from .py_tests import OK_STATUSES
 
 PACKAGE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -114,6 +115,18 @@ class Checks:
     def expect_status(self, label: str, want: int, status: int, body) -> None:
         """expect() an HTTP status, with the start of the body in the label."""
         self.expect(f"{label}: HTTP status (body {str(body)[:200]!r})", want, status)
+
+    def py_tests(self, result) -> None:
+        """Record a PyTestResult: one expect per test (ok and skipped pass, anything
+        else fails with its reason as got), the Ran N count against the parsed
+        tests, import errors and the exit code."""
+        for t in result.tests:
+            ok = t.status in OK_STATUSES
+            got = t.status if ok or not t.reason else f"{t.status}: {t.reason}"
+            self.expect(t.id, "ok or skipped", got, ok=ok)
+        self.expect("Ran N tests equals parsed results", result.ran, len(result.tests))
+        self.expect("import errors", [], result.import_errors)
+        self.expect("run_py_tests exit code", 0, result.rc)
 
     def oplog_summary(self, lines, *, tag: str = oplog.TAG, **kw) -> oplog.Line:
         """See oplog.check_summary: fn=, outcome=, code_suffix=, user=."""
@@ -347,12 +360,31 @@ class Ticket:
             hostname=self.host, ip=ip, worktree=self.worktree,
             output_dir=self.output_dir,
         ))
-        app.wapi_version = self.wapi_version
-        app.on_call = self._record_call
-        self._app = app
-        self.run.add(app)
+        self._adopt(app)
         self._log.info("Connected %s (%s)", self.host, ip)
         self._read_build()
+
+    def connect_local(
+        self, container_name: str, *, chroot: str | None = None, ip: str = "",
+    ) -> None:
+        """Target a local NCC container instead of a lab appliance. ip is for
+        display only: an unset ip (None) would make LocalAppliance.from_config run
+        set_network and reboot, "" does not."""
+        cfg = {"chroot": chroot} if chroot else {}
+        self.host = self.host or container_name
+        self._adopt(LocalAppliance.from_config(LocalApplianceConfig(
+            container_name=container_name, ip=ip, worktree=self.worktree,
+            output_dir=self.output_dir, **cfg,
+        )))
+        self._log.info("Connected local container %s", container_name)
+        self._read_build()
+
+    def _adopt(self, app) -> None:
+        app.wapi_version = self.wapi_version
+        app.on_call = self._record_call
+        app.container.output_dir = self.output_dir
+        self._app = app
+        self.run.add(app)
 
     def _record_call(self, record: dict) -> None:
         if self._current is not None:

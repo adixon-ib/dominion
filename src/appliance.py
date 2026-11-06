@@ -118,6 +118,12 @@ class _ApplianceBase:
     def console_session(self, **kwargs):
         return self.container.console_session(**kwargs)
 
+    def deploy_test_files(self, subpaths: list[str]) -> DeployResult:
+        return self.container.deploy_test_files(subpaths)
+
+    def run_py_tests(self, tests, **kwargs):
+        return self.container.run_py_tests(tests, **kwargs)
+
     def usage_mode(self) -> str:
         """"Licenses" or "IPc", from the console `show nios_usage_mode`."""
         with self.console_session() as console:

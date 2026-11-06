@@ -7,19 +7,22 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from . import py_tests
 from .config import LocalContainerConfig
 from .constants import (
-    NIOS_CONSOLE_USER,
+    ADMIN_HTTPD_WAIT_TIMEOUT,
     NIOS_CONSOLE_PASSWORD,
+    NIOS_CONSOLE_USER,
     NIOS_REBOOT_TIMEOUT,
     NIOS_WAPI_POLL_INTERVAL,
     NIOS_WAPI_READY_TIMEOUT,
+    PY_TESTS_TIMEOUT,
     WAPI_VERSION,
 )
 from .deploy import DeployError, DeployMixin
 from .log import LogDump, LogMark, create_logger
 from .network import LocalNetworkMixin
-from .session import ShellSession, ConsoleSession
+from .session import ConsoleSession, ShellSession
 from .transport import CommandError, LocalDockerTransport, TransportError
 
 if TYPE_CHECKING:
@@ -38,6 +41,7 @@ class NiosContainer(DeployMixin):
     """
 
     on_call = None  # optional hook, receives a record per sh() call
+    output_dir: str | None = None  # where run_py_tests saves its full output
 
     def __init__(
         self,
@@ -56,6 +60,7 @@ class NiosContainer(DeployMixin):
         self._logger = logger or log
         self._console_user = console_user
         self._console_password = console_password
+        self._py_test_runs = 0
         self._disable_ssh_rate_limit()
 
     def _disable_ssh_rate_limit(self) -> None:
@@ -100,22 +105,39 @@ class NiosContainer(DeployMixin):
         finally:
             session._close()
 
-    def sh(self, cmd: str, check: bool = True) -> tuple[int, str, str]:
-        """Run a shell command line in the container: (exit code, stdout, stderr)."""
+    def sh(
+        self, cmd: str, check: bool = True, timeout: int | None = None,
+        report_lines: int | None = None, report_log: str | None = None,
+    ) -> tuple[int, str, str]:
+        """Run a shell command line in the container: (exit code, stdout, stderr).
+
+        timeout (seconds) overrides the transport's default for this call.
+        report_lines caps the stdout kept in the on_call record to its last
+        lines (the note names report_log, a file holding the full output), the
+        returned stdout is complete."""
+        opts = {} if timeout is None else {"timeout": timeout}
         try:
-            rc, out, err = self._transport.run(f"sh -c {shlex.quote(cmd)}", check=check)
+            rc, out, err = self._transport.run(
+                f"sh -c {shlex.quote(cmd)}", check=check, **opts,
+            )
         except CommandError as e:
-            self._emit_sh(cmd, e.exit_code, e.stdout, e.stderr)
+            self._emit_sh(
+                cmd, e.exit_code, e.stdout, e.stderr, report_lines, report_log,
+            )
             raise
         except TransportError as e:
             self._emit_sh(cmd, -1, "", str(e))
             raise
-        self._emit_sh(cmd, rc, out, err)
+        self._emit_sh(cmd, rc, out, err, report_lines, report_log)
         return rc, out, err
 
-    def _emit_sh(self, cmd, rc, out, err) -> None:
+    def _emit_sh(
+        self, cmd, rc, out, err, report_lines=None, report_log=None,
+    ) -> None:
         if not self.on_call:
             return
+        if report_lines is not None:
+            out = self._cap_for_report(out, report_log, report_lines)
         try:
             self.on_call({
                 "kind": "sh", "cmd": cmd, "rc": rc, "stdout": out, "stderr": err,
@@ -224,13 +246,17 @@ class NiosContainer(DeployMixin):
     REPORT_LOG_LINES = 200  # lines of a dumped log kept in the on_call record
 
     @classmethod
-    def _cap_for_report(cls, text: str, dest: Path) -> str:
+    def _cap_for_report(
+        cls, text: str, dest: str | Path | None = None, keep: int | None = None,
+    ) -> str:
+        keep = cls.REPORT_LOG_LINES if keep is None else keep
         lines = text.splitlines(keepends=True)
-        if len(lines) <= cls.REPORT_LOG_LINES:
+        if len(lines) <= keep:
             return text
-        more = len(lines) - cls.REPORT_LOG_LINES
-        note = f"... {more} more lines, full log in {dest}\n"
-        return note + "".join(lines[-cls.REPORT_LOG_LINES:])
+        note = f"... {len(lines) - keep} more lines"
+        if dest is not None:
+            note += f", full log in {dest}"
+        return note + "\n" + "".join(lines[-keep:])
 
     def mark_log(self, log_path: str) -> LogMark:
         _, stdout, _ = self._transport.run(f"wc -l {shlex.quote(log_path)}")
@@ -305,6 +331,92 @@ class NiosContainer(DeployMixin):
         since: LogMark | None = None,
     ) -> int:
         return self.count_log(self.INFOBLOX_LOG, pattern, since=since)
+
+    ADMIN_HTTPD_WAIT_CMD = (
+        "for i in $(seq 120); do pgrep -f [a]dmin-httpd.conf >/dev/null && exit 0; "
+        "sleep 5; done; exit 1"
+    )
+
+    def wait_ready(self, timeout: int = NIOS_WAPI_READY_TIMEOUT) -> None:
+        """Wait for admin-httpd, then for WAPI to answer. WAPI can hang instead of
+        refusing right after a restart or factory reset, so a curl timeout or a
+        not-ready answer is retried (every NIOS_WAPI_POLL_INTERVAL) until timeout."""
+        rc, _, _ = self.sh(
+            self.ADMIN_HTTPD_WAIT_CMD, check=False, timeout=ADMIN_HTTPD_WAIT_TIMEOUT,
+        )
+        if rc != 0:
+            raise RuntimeError(
+                f"container or admin-httpd not running in {self.container_name} "
+                f"(exit {rc})"
+            )
+        deadline = time.time() + timeout
+        while True:
+            try:
+                return self._wait_for_wapi(timeout=60)
+            except (TransportError, RuntimeError):
+                if time.time() >= deadline:
+                    raise RuntimeError(
+                        f"WAPI not answering after {timeout}s"
+                    ) from None
+                time.sleep(NIOS_WAPI_POLL_INTERVAL)
+
+    def run_py_tests(  # noqa: PLR0913
+        self,
+        tests: str | list[str],
+        *,
+        keywords: str = "all",
+        timeout: int = PY_TESTS_TIMEOUT,
+        wait: bool = True,
+        output_dir: str | None = None,
+    ) -> py_tests.PyTestResult:
+        """Run NIOS unit tests with run_py_tests (always --no-check-licenses, the
+        license check segfaults with the OneDB C extensions) and parse the result.
+
+        tests is a module or class name (infoblox.test.one.wapi.test_x.Class) or a
+        list. The command is `run_py_tests --no-check-licenses -k <keywords> -v -N
+        <name> <name> 2>&1`: -N (--dontfork) once, the names positional. keywords
+        is the -k list; ibtest's own default is "quick", "all" runs every test of
+        the named modules and classes. wait waits for admin-httpd and WAPI first
+        (wait_ready). Each run resets the box to factory defaults afterwards, so
+        it takes minutes.
+
+        Never run two at once on one container: they reset the box under each
+        other. This raises RuntimeError, naming the process, if a run_py_tests
+        process is already running in the container (a pgrep check, so it also
+        catches another script, not only another thread). The check and the start
+        are not atomic.
+
+        With an output_dir (argument, else self.output_dir, which Ticket sets) the
+        full output is saved to <output_dir>/py_tests/<n>.log and result.log_path
+        is its path. The on_call record keeps the last 200 lines and names that
+        file. result.raw has all of it. A non-zero rc does not raise: look at
+        result.ok.
+        """
+        cmd = py_tests.command(tests, keywords)
+        rc, running, _ = self.sh("pgrep -af '[r]un_py_tests'", check=False)
+        if rc == 0:
+            raise RuntimeError(
+                f"run_py_tests is already running in {self.container_name}: "
+                f"{running.strip()}"
+            )
+        if wait:
+            self.wait_ready()
+        out_dir = output_dir or self.output_dir
+        path = None
+        if out_dir:
+            self._py_test_runs += 1
+            path = os.path.join(out_dir, "py_tests", f"{self._py_test_runs}.log")
+        rc, out, _ = self.sh(
+            cmd, check=False, timeout=timeout, report_lines=self.REPORT_LOG_LINES,
+            report_log=path,
+        )
+        if path:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(out)
+        result = py_tests.parse(out, rc)
+        result.log_path = path
+        return result
 
     def __repr__(self) -> str:
         return f"NiosContainer({self.container_name!r})"

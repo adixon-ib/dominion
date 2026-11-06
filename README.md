@@ -216,6 +216,26 @@ Every `Ticket` run also writes `report.html` next to `report.md`: a self-contain
 
 A run that used `nios_log` also writes `nios_log.log`: every captured NIOS line, grouped by phase or step in run order. Each group starts with `== <name> | <from -> to> | <PASS|FAIL|SKIP> <duration> | N lines`, and its lines are sorted by the infoblox.log timestamp (a line without one keeps its place). It is built from the captures, with no cap and no re-read of infoblox.log. The summary prints it after the results (first 100 lines, then `... N more file lines, see <path>`), `summary.txt` has a `NIOS log: <path> (N lines)` line, and `report.html` links to it. Without any capture, none of that appears.
 
+### NIOS unit tests (run_py_tests)
+
+`container.run_py_tests(tests, keywords="all", timeout=PY_TESTS_TIMEOUT)` runs `/infoblox/tests/bin/run_py_tests --no-check-licenses -k <keywords> -v -N <test> <test> ... 2>&1` (`-N` is the boolean --dontfork flag, given once; the tests are positional, a name or a list; `keywords="all"` runs every test of them, ibtest's default is `quick`), after waiting for admin-httpd and WAPI (`wait=False` skips). It returns a `PyTestResult`: `ran` (the "Ran N tests" sum), `tests` (`PyTest(id, status, reason)`), `counts`, `raw`, `rc`, `import_errors`, `verdict` and `ok` (rc 0, `ran` > 0, only ok/skipped/expected failure, no import error, as many parsed tests as `ran`), `log_path`. The exit code alone is not trusted: a bad class name exits 0 with an import error. Never run two at once on one container (each run factory-resets the box): a second call raises while a `run_py_tests` process is running. `report.md` keeps the last 200 lines of the output; the full text is in `result.raw` and, in a Ticket (or with `output_dir=`), in `py_tests/<n>.log` (`result.log_path`). The busy error names the running process.
+
+`container.deploy_test_files([worktree subpaths])` uploads NIOS test files (e.g. `products/one/server/src/wapi/test/test_token_bundle.py`) to `/infoblox/tests/lib/python/infoblox/test/<PY_TEST_SUBDIR>/`, md5-verified, where the subdir comes from the test directory's Makefile (`one` if unset; only a plain `PY_TEST_SUBDIR =` line is read). `Ticket.connect_local("drogon")` targets an NCC container (a `LocalAppliance`, calls land in `report.md`), and `c.py_tests(result)` records one check per test.
+
+```python
+with Ticket("NIOS-111696-ncc", None, results_dir=DIR, worktree=WORKTREE) as t:
+    connect = t.phase("1. connect", lambda: t.connect_local("drogon"))
+
+    def run():
+        t.container.deploy_test_files([WAPI_TEST, PYUTIL_TEST])
+        result = t.container.run_py_tests(
+            ["infoblox.test.one.test_oplog"], keywords="base")
+        with t.checks("test_oplog") as c:
+            c.py_tests(result)
+
+    t.phase("2. unit tests", run, needs=connect)
+```
+
 ### Results
 
 dominion is designed to log every command ran on the appliance. Below is sample output from a run:
