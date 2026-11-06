@@ -1244,3 +1244,36 @@ def test_phase_section_has_no_state_line(tmp_path):
     t = make(tmp_path)
     run_ticket(t, lambda t: t.phase("1. connect", t.connect))
     assert "State:" not in read_report(t)
+
+
+def test_generator_needs_gates_every_step(tmp_path):
+    box, ran = Box(), []
+
+    def body(t):
+        bad = t.phase("1. connect", boom)
+        t.steps(
+            [("2. a", "Licenses", "IPc", lambda: ran.append(1)),
+             ("3. b", "Licenses", "IPc", lambda: ran.append(2))],
+            probe=box.probe, needs=(p for p in [bad]),
+        )
+
+    code, _ = run_ticket(make(tmp_path), body)
+    assert code == 1
+    assert ran == []
+    assert box.probes == 0
+
+
+def test_state_comparison_that_raises_fails_the_step(tmp_path):
+    class Odd:
+        def __eq__(self, other):
+            raise TypeError("cannot compare")
+
+    ran, out = [], {}
+    t = make(tmp_path)
+    code, _ = run_ticket(t, lambda t: out.update(p=t.steps(
+        [("2. a", "Licenses", "IPc", lambda: ran.append(1))], probe=Odd,
+    )))
+    assert code == 1
+    assert ran == []
+    assert out["p"][0].status == "FAIL"
+    assert "TypeError: cannot compare" in read_report(t)

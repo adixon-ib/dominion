@@ -387,6 +387,7 @@ class Ticket:
         (name, state, fn): it runs at the end of the block, after cleanups,
         once any step has started.
         """
+        needs = [needs] if isinstance(needs, Phase) else list(needs or ())
         entry = None
         if home is not None:
             entry = dict(zip(("name", "state", "fn"), home, strict=True))
@@ -412,6 +413,10 @@ class Ticket:
         section["state"]["after"] = got
         return got
 
+    def _expect_state(self, section: dict, name: str, state, probe) -> None:
+        with self.checks(name) as c:
+            c.expect(f"box in {_fmt(state)}", state, self._probe_after(section, probe))
+
     def _state_step(  # noqa: PLR0913
         self, name, frm, to, fn, *, probe, home, needs,
     ) -> Phase:
@@ -424,6 +429,7 @@ class Ticket:
             return self._skip(section, "needs " + ", ".join(unmet), blocked=True)
         try:
             before = self._probe(probe)
+            met = before == frm
         except Exception as e:
             crashed = e
             section["pre"].append(
@@ -431,7 +437,7 @@ class Ticket:
             )
             return Phase(name, self._step(section, lambda: self._reraise(crashed)))
         section["state"]["before"] = before
-        if before != frm:
+        if not met:
             section["pre"].append((label, f"not met (box in {_fmt(before)})"))
             self._unmet.append(f"{name}: {label}")
             return self._skip(
@@ -448,8 +454,7 @@ class Ticket:
                 with contextlib.suppress(Exception):
                     self._probe_after(section, probe)
                 raise
-            with self.checks(name) as c:
-                c.expect(f"box in {_fmt(to)}", to, self._probe_after(section, probe))
+            self._expect_state(section, name, to, probe)
 
         return Phase(name, self._step(section, run))
 
@@ -523,11 +528,7 @@ class Ticket:
 
     def _home(self, section: dict, h: dict) -> None:
         h["fn"]()
-        with self.checks(h["name"]) as c:
-            c.expect(
-                f"box in {_fmt(h['state'])}", h["state"],
-                self._probe_after(section, h["probe"]),
-            )
+        self._expect_state(section, h["name"], h["state"], h["probe"])
 
     def _survive(self, fn: Callable[[], object]) -> Callable[[], object]:
         """Make a BaseException (second Ctrl-C) fail this cleanup, not the rest."""
