@@ -210,7 +210,7 @@ class Oplog(IpcTicketTest):
 Oplog(HOST, worktree=WORKTREE, results_dir=RESULTS_DIR, skip_deploy=SKIP_DEPLOY).run()
 ```
 
-Subclass `TicketTest` directly for other boxes: define `name`, `home_state`, `probe()` and `home()`. `IpcTicketTest` (`actions/ipc_ticket.py`) supplies them for IPc: state from `app.usage_mode()`, home with `reset_all`, `deploy_groups={"pyabs"}`, WAPI v2.15. `upload_bundle_token(bundle=None)` uploads the patched bundle (default `bundle_path`) and keeps the token in `self.state.tokens`. `bundle(func, data, timeout=None)` POSTs `ipc:bundle?_function=func` and returns `(status, body)` without raising; `apply` gets a 300s timeout. Override `preflight()` (and call `super().preflight()`) or `deploy()` for ticket-specific setup.
+Subclass `TicketTest` directly for other boxes: define `name`, `home_state`, `probe()` and `home()`. `IpcTicketTest` (`actions/ipc_ticket.py`) supplies them for IPc: state from `app.usage_mode()`, home with `reset_all`, `deploy_groups={"pyabs"}`, WAPI v2.15. `upload_bundle_token(bundle=None)` uploads the patched bundle (default `bundle_path`) and keeps the token in `self.state.tokens`. `bundle(func, data, timeout=None)` POSTs `ipc:bundle?_function=func` and returns `(status, body)` without raising; `apply` gets a 300s timeout. `initial_state` seeds `self.state` (`IpcTicketTest` uses `{"tokens": []}`). `deploy_required` lists worktree subpaths that must exist: the deploy phase fails if one is absent or skipped by `deploy_token_py`; the `deploy_token_py` result is kept in `self.deploy_result`. `bundle_path` is the default bundle for `upload_bundle_token()`. Override `preflight()` (and call `super().preflight()`) or `deploy()` for ticket-specific setup.
 
 ### Results
 

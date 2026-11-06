@@ -392,3 +392,67 @@ def test_ipc_upload_bundle_token_needs_a_bundle(box):
     tt._t = types.SimpleNamespace(app=None, state=types.SimpleNamespace(tokens=[]))
     with pytest.raises(ValueError, match="no bundle"):
         tt.upload_bundle_token()
+
+
+# -- deploy_required and deploy_result -------------------------------------------
+
+def test_deploy_result_is_kept(box, tmp_path):
+    cls = make_test(box, deploy_groups={"pyabs"})
+    tt = cls("vm-1", results_dir=str(tmp_path))
+    assert tt.deploy_result is None
+    run(tt)
+    assert tt.deploy_result.artifact == "token_py"
+
+
+def test_required_deploy_file_absent_fails_before_anything_deploys(box, tmp_path):
+    wt = tmp_path / "wt"
+    wt.mkdir()
+    cls = make_test(
+        box, deploy_groups={"pyabs"}, deploy_files={"gone.py": "/d/gone.py"},
+        deploy_required=("gone.py",),
+    )
+    tt = cls("vm-1", results_dir=str(tmp_path / "r"), worktree=str(wt))
+    assert run(tt) == 1
+    assert "required files absent from the worktree: ['gone.py']" in report(tt)
+    assert not [e for e in box.log if e[0] in ("deploy_token_py", "step")]
+
+
+def test_required_file_skipped_by_deploy_token_py_fails_deploy(box, tmp_path):
+    wt = tmp_path / "wt"
+    wt.mkdir()
+    FakeApp.skipped = [str(wt / "sub/need.py"), str(wt / "sub/other.py")]
+    cls = make_test(box, deploy_groups={"pyabs"}, deploy_required=("sub/need.py",))
+    tt = cls("vm-1", results_dir=str(tmp_path / "r"), worktree=str(wt))
+    assert run(tt) == 1
+    assert "required files absent from the worktree: ['sub/need.py']" in report(tt)
+    assert tt.deploy_result is not None
+    assert not [e for e in box.log if e[0] == "step"]
+
+
+def test_optional_missing_files_do_not_fail_when_not_required(box, tmp_path):
+    wt = tmp_path / "wt"
+    wt.mkdir()
+    FakeApp.skipped = [str(wt / "sub/other.py")]
+    cls = make_test(
+        box, deploy_groups={"pyabs"}, deploy_files={"gone.py": "/d/gone.py"},
+        deploy_required=("sub/need.py",),
+    )
+    tt = cls("vm-1", results_dir=str(tmp_path / "r"), worktree=str(wt))
+    assert run(tt) == 0
+
+
+def test_ipc_upload_bundle_token_survives_initial_state_without_tokens(
+    box, monkeypatch, tmp_path,
+):
+    monkeypatch.setattr(ipc_ticket, "upload_bundle_token", lambda app, path: "tok")
+    out = []
+
+    def go(self):
+        out.append(self.upload_bundle_token())
+        out.append(list(self.state.tokens))
+        box.state = "B"
+
+    cls = ipc_test(box, home_state="A", initial_state={"other": 1},
+                   go=step("A", "B", "go")(go), probe=lambda self: box.state)
+    run(cls("vm-1", results_dir=str(tmp_path), skip_home=True))
+    assert out == ["tok", ["tok"]]

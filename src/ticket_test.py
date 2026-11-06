@@ -46,6 +46,7 @@ class TicketTest(abc.ABC):
     deploy_files: ClassVar[dict[str, str]] = {}  # worktree subpath -> container path
     deploy_groups: ClassVar[set[str]] = set()  # deploy_token_py groups, empty = none
     initial_state: ClassVar[dict] = {}  # Ticket(state=...), becomes self.state
+    deploy_required: ClassVar[tuple[str, ...]] = ()  # worktree subpaths that must exist
 
     def __init__(  # noqa: PLR0913
         self,
@@ -67,6 +68,7 @@ class TicketTest(abc.ABC):
         self.skip_deploy = skip_deploy
         self.skip_home = skip_home
         self._t: Ticket | None = None
+        self.deploy_result = None  # DeployResult of deploy_token_py, once run
 
     @abc.abstractmethod
     def probe(self) -> object:
@@ -83,7 +85,10 @@ class TicketTest(abc.ABC):
 
     def deploy(self) -> None:
         """Upload deploy_files (md5-checked), deploy deploy_groups, wait for WAPI.
-        A file absent from the worktree is noted and not uploaded."""
+        A file absent from the worktree is noted and not uploaded, unless it is in
+        deploy_required: then the phase fails. The deploy_token_py result is kept
+        in self.deploy_result."""
+        absent = []
         for sub, dest in self.deploy_files.items():
             if not self.worktree:
                 raise RuntimeError(f"no worktree given to upload {sub}")
@@ -91,13 +96,24 @@ class TicketTest(abc.ABC):
             if os.path.isfile(path):
                 self.container.upload_file(path, dest)
             else:
+                absent.append(sub)
                 self.t.note(f"{sub} absent in worktree: not uploaded")
+        self._require_present(absent)
         if self.deploy_groups:
-            result = self.app.deploy_token_py(groups=self.deploy_groups)
-            skipped = result.details.get("skipped")
+            self.deploy_result = self.app.deploy_token_py(groups=self.deploy_groups)
+            skipped = self.deploy_result.details.get("skipped") or []
             if skipped:
                 self.t.note(f"deploy_token_py skipped (absent in worktree): {skipped}")
+            self._require_present(
+                [r for r in self.deploy_required
+                 if os.path.join(self.worktree, r) in skipped],
+            )
         self.app.wapi.wait_until_ready()
+
+    def _require_present(self, absent: list[str]) -> None:
+        missing = [r for r in self.deploy_required if r in absent]
+        if missing:
+            raise RuntimeError(f"required files absent from the worktree: {missing}")
 
     @property
     def t(self) -> Ticket:

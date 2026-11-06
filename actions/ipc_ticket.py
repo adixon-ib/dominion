@@ -35,12 +35,13 @@ class IpcTicketTest(TicketTest):
 
     def upload_bundle_token(self, bundle: str | None = None) -> str:
         """Fileop upload of the bundle patched with this grid's lpc_uid. The token
-        is also appended to self.state.tokens (for oplog_contract secrets)."""
+        is also appended to self.state.tokens (created if missing), for the
+        oplog_contract secrets."""
         path = bundle or self.bundle_path
         if not path:
             raise ValueError("no bundle: pass one or set bundle_path")
         token = upload_bundle_token(self.app, path)
-        self.state.tokens.append(token)
+        vars(self.state).setdefault("tokens", []).append(token)
         return token
 
     def bundle(self, func: str, data: dict, timeout: int | None = None):
