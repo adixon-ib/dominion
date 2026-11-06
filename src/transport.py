@@ -180,10 +180,13 @@ class SSHDockerTransport(_BaseTransport):
             cmd += ["-i", self.key_path]
         return cmd
 
-    def run(self, cmd: str, check: bool = True, quiet: bool = False) -> tuple[int, str, str]:
+    def run(
+        self, cmd: str, check: bool = True, quiet: bool = False,
+        timeout: int | None = None,
+    ) -> tuple[int, str, str]:
         docker_cmd = f"docker exec {self.container_name} {cmd}"
         argv = self._ssh_base + [docker_cmd]
-        return self._exec(argv, check=check, quiet=quiet)
+        return self._exec(argv, check=check, quiet=quiet, timeout=timeout)
 
     def run_on_host(self, cmd: str, check: bool = True, quiet: bool = False) -> tuple[int, str, str]:
         argv = self._ssh_base + [cmd]
@@ -256,9 +259,12 @@ class LocalDockerTransport(_BaseTransport):
         """No SSH hop needed. cmd already targets the local Docker daemon."""
         return cmd
 
-    def run(self, cmd: str, check: bool = True, quiet: bool = False) -> tuple[int, str, str]:
+    def run(
+        self, cmd: str, check: bool = True, quiet: bool = False,
+        timeout: int | None = None,
+    ) -> tuple[int, str, str]:
         argv = ["docker", "exec", self.container_name, "bash", "-c", cmd]
-        return self._exec(argv, check=check, quiet=quiet)
+        return self._exec(argv, check=check, quiet=quiet, timeout=timeout)
 
     def run_on_host(self, cmd: str, check: bool = True, quiet: bool = False) -> tuple[int, str, str]:
         argv = shlex.split(cmd)

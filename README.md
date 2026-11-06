@@ -178,6 +178,14 @@ t.steps(
 
 A phase is skipped (and its dependants with it) when a `needs` phase failed or was skipped, or a `pre` precondition is unmet. A `skip=` reason is a deliberate skip: it does not block dependants or change the exit code. An unmet `pre` shows as SKIP but exits 1. `Ticket(..., state={...})` gives `t.state`, a namespace for values shared between phases; its fields are listed in `report.md` under "State at exit". Use `t.container.sh(cmd)` for shell commands in the NIOS container. Request bodies, sh commands and responses are recorded as given, with no masking, so keep secrets out of them.
 
+Helpers for ticket tests:
+
+- `with t.nios_log("ipc:bundle ") as nl:` marks infoblox.log, then `nl.lines` holds the lines containing the fixed string written inside the block (set also when the block raises). The grep is listed under Calls.
+- `c.expect_status(label, want, status, body)` checks an HTTP status and shows the body start in the label.
+- `c.oplog_summary / oplog_step / oplog_event / oplog_contract` check NIOS `oplog` request lines (`src/oplog.py`, `oplog.parse(lines, tag)`). The line format comes from a NIOS change that is not merged yet and may change.
+- `app.usage_mode()` returns `"Licenses"` or `"IPc"`. `container.upload_file(src, dest)` uploads, cleans stale `.pyc`/`.pys` and verifies the md5 (`DeployError` with both hashes). `app.wapi.request(..., timeout=)` overrides the transport timeout for one call. `patched_bundle` and `upload_bundle_token(app, path)` (in `dominion.actions`) patch the token bundle with the grid's `lpc_uid` and upload it with fileop.
+- `container.dump_log` and `count_log` appear under Calls like `sh`. `dump_log(..., fixed=True)` greps a fixed string.
+
 ### Results
 
 dominion is designed to log every command ran on the appliance. Below is sample output from a run:

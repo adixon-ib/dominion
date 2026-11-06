@@ -25,7 +25,7 @@ def app(monkeypatch):
     def fake_patched(app, bundle_path):
         return os.path.join(tempfile.mkdtemp(), "patched.tar")
 
-    monkeypatch.setattr(token_enable, "_patched_bundle", fake_patched)
+    monkeypatch.setattr(token_enable, "patched_bundle", fake_patched)
     monkeypatch.setattr(token_enable.time, "sleep", lambda s: None)
     a = MagicMock()
     a.hostname = "vm-test"
@@ -203,7 +203,7 @@ def test_patched_bundle_injects_lpc_uid(lpc_app, tmp_path):
     bundle = str(tmp_path / "b.tar")
     _make_bundle(bundle, {"licenseUid": "old", "keep": 1})
 
-    out = token_enable._patched_bundle(lpc_app, bundle)
+    out = token_enable.patched_bundle(lpc_app, bundle)
     try:
         with tarfile.open(out) as tar:
             names = sorted(tar.getnames())
@@ -218,4 +218,42 @@ def test_patched_bundle_injects_lpc_uid(lpc_app, tmp_path):
 
 def test_patched_bundle_missing_file(lpc_app, tmp_path):
     with pytest.raises(FileNotFoundError, match="not found"):
-        token_enable._patched_bundle(lpc_app, str(tmp_path / "nope.tar"))
+        token_enable.patched_bundle(lpc_app, str(tmp_path / "nope.tar"))
+
+
+def test_upload_bundle_token_uploads_patched_copy_and_cleans_up(
+    lpc_app, tmp_path,
+):
+    bundle = str(tmp_path / "b.tar")
+    _make_bundle(bundle, {"licenseUid": "old"})
+    seen = {}
+
+    def upload_file(path):
+        seen["path"] = path
+        seen["existed"] = os.path.exists(path)
+        return "tok"
+
+    lpc_app.wapi.upload_file.side_effect = upload_file
+
+    assert token_enable.upload_bundle_token(lpc_app, bundle) == "tok"
+    assert seen["existed"]
+    assert not os.path.exists(os.path.dirname(seen["path"]))
+
+
+def test_upload_bundle_token_cleans_up_when_upload_fails(lpc_app, tmp_path):
+    bundle = str(tmp_path / "b.tar")
+    _make_bundle(bundle, {})
+    paths = []
+
+    def upload_file(path):
+        paths.append(path)
+        raise WapiError("POST", "x", 500, "boom")
+
+    lpc_app.wapi.upload_file.side_effect = upload_file
+    with pytest.raises(WapiError):
+        token_enable.upload_bundle_token(lpc_app, bundle)
+    assert not os.path.exists(os.path.dirname(paths[0]))
+
+
+def test_private_patched_bundle_alias_kept():
+    assert token_enable._patched_bundle is token_enable.patched_bundle

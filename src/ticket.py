@@ -26,8 +26,9 @@ import subprocess
 import sys
 import types
 from collections.abc import Callable, Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
+from . import oplog
 from .appliance import Appliance, lab_network
 from .config import ApplianceConfig
 from .constants import WAPI_VERSION
@@ -110,6 +111,24 @@ class Checks:
             log.error("CHECK FAILED: %s", msg)
             self.failures.append(msg)
 
+    def expect_status(self, label: str, want: int, status: int, body) -> None:
+        """expect() an HTTP status, with the start of the body in the label."""
+        self.expect(f"{label}: HTTP status (body {str(body)[:200]!r})", want, status)
+
+    def oplog_summary(self, lines, **kw) -> oplog.Line:
+        """See oplog.check_summary: fn=, outcome=, code_suffix=, user=."""
+        return oplog.check_summary(self, lines, **kw)
+
+    def oplog_step(self, lines, rid: str, name: str) -> oplog.Line:
+        return oplog.check_step(self, lines, rid, name)
+
+    def oplog_event(self, lines, rid: str, name: str, **want) -> oplog.Line:
+        return oplog.check_event(self, lines, rid, name, **want)
+
+    def oplog_contract(self, lines, **kw) -> None:
+        """See oplog.check_contract: caller_file=, secrets=."""
+        oplog.check_contract(self, lines, **kw)
+
     def __enter__(self):
         return self
 
@@ -119,6 +138,15 @@ class Checks:
                 f"{self.what}:\n  " + "\n  ".join(self.failures)
             )
         return False
+
+
+@dataclass
+class NiosLog:
+    """infoblox.log lines captured by Ticket.nios_log. lines is set when the
+    block exits."""
+
+    lines: list[str] = field(default_factory=list)
+    line_count: int = 0  # infoblox.log length at entry
 
 
 def _state_line(s: dict) -> str:
@@ -236,6 +264,7 @@ class Ticket:
         self._current: dict | None = None
         self._unmet: list[str] = []
         self._saved: tuple | None = None
+        self._nios_logs = 0
         self._logfile = None
         self._log = create_logger(name="dominion.ticket")
 
@@ -286,6 +315,23 @@ class Ticket:
     def checks(self, what: str) -> Checks:
         sink = self._current["checks"] if self._current is not None else None
         return Checks(what, sink)
+
+    @contextlib.contextmanager
+    def nios_log(self, pattern: str):
+        """Capture the infoblox.log lines containing pattern (fixed string)
+        written while the block runs. nl.lines is set on exit, also when the
+        block raises. The grep is listed under Calls in report.md."""
+        mark = self.app.mark_infoblox_log()
+        nl = NiosLog(line_count=mark.line_count)
+        self._nios_logs += 1
+        dest = os.path.join(self.output_dir, "nios_log", f"{self._nios_logs}.log")
+        try:
+            yield nl
+        finally:
+            dump = self.app.dump_infoblox_log(
+                dest=dest, since=mark, grep=pattern, fixed=True,
+            )
+            nl.lines = dump.lines
 
     def _skip(
         self, section: dict, reason: str, blocked: bool, unmet: bool = False,

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import shlex
 import time
 from contextlib import contextmanager
@@ -15,7 +16,7 @@ from .constants import (
     NIOS_WAPI_READY_TIMEOUT,
     WAPI_VERSION,
 )
-from .deploy import DeployMixin
+from .deploy import DeployError, DeployMixin
 from .log import LogDump, LogMark, create_logger
 from .network import LocalNetworkMixin
 from .session import ShellSession, ConsoleSession
@@ -122,6 +123,22 @@ class NiosContainer(DeployMixin):
         except Exception:
             self._logger.exception("on_call hook failed")
 
+    def upload_file(self, src: str, dest: str) -> str:
+        """Upload src to dest in the container, clean stale .pyc/.pys next to it
+        and verify the md5. Returns the hash; raises DeployError on mismatch."""
+        local_h = self._local_md5(src)
+        self._transport.upload(src, dest)
+        self._clean_pycache(dest)
+        remote_h = self._remote_md5(dest)
+        self._emit_sh(f"upload {src} -> {dest}", 0, f"{remote_h}  {dest}\n", "")
+        if remote_h != local_h:
+            raise DeployError(
+                f"Hash mismatch for {os.path.basename(dest)}: "
+                f"local={local_h} remote={remote_h}",
+                artifact=dest,
+            )
+        return local_h
+
     def _wait_for_wapi(self, timeout: int = NIOS_WAPI_READY_TIMEOUT) -> None:
         deadline = time.time() + timeout
         while time.time() < deadline:
@@ -211,13 +228,14 @@ class NiosContainer(DeployMixin):
 
     def _build_log_cmd(
         self, log_path: str, since: LogMark | None, grep: str | None,
+        fixed: bool = False,
     ) -> str:
         if since is not None:
             cmd = f"tail -n +{since.line_count + 1} {shlex.quote(log_path)}"
         else:
             cmd = f"cat {shlex.quote(log_path)}"
         if grep is not None:
-            cmd += f" | grep -- {shlex.quote(grep)}"
+            cmd += f" | grep {'-F ' if fixed else ''}-- {shlex.quote(grep)}"
         return cmd
 
     def dump_log(
@@ -227,13 +245,15 @@ class NiosContainer(DeployMixin):
         dest: str | Path,
         since: LogMark | None = None,
         grep: str | None = None,
+        fixed: bool = False,
     ) -> LogDump:
         dest = Path(dest)
         if dest.is_dir() or (not dest.suffix and not dest.exists()):
             dest.mkdir(parents=True, exist_ok=True)
             dest = dest / Path(log_path).name
-        cmd = self._build_log_cmd(log_path, since, grep)
-        _, stdout, _ = self._transport.run(cmd, check=False, quiet=True)
+        cmd = self._build_log_cmd(log_path, since, grep, fixed)
+        rc, stdout, stderr = self._transport.run(cmd, check=False, quiet=True)
+        self._emit_sh(cmd, rc, stdout, stderr)
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_text(stdout)
         self._logger.info("Log dumped to %s (%d bytes)", dest, len(stdout))
@@ -245,8 +265,11 @@ class NiosContainer(DeployMixin):
         dest: str | Path,
         since: LogMark | None = None,
         grep: str | None = None,
+        fixed: bool = False,
     ) -> LogDump:
-        return self.dump_log(self.INFOBLOX_LOG, dest=dest, since=since, grep=grep)
+        return self.dump_log(
+            self.INFOBLOX_LOG, dest=dest, since=since, grep=grep, fixed=fixed,
+        )
 
     def count_log(
         self,
@@ -257,7 +280,8 @@ class NiosContainer(DeployMixin):
     ) -> int:
         cmd = self._build_log_cmd(log_path, since, grep=None)
         cmd += f" | grep -c -- {shlex.quote(pattern)}"
-        _, stdout, _ = self._transport.run(cmd, check=False)
+        rc, stdout, stderr = self._transport.run(cmd, check=False)
+        self._emit_sh(cmd, rc, stdout, stderr)
         return int(stdout.strip() or 0)
 
     def count_infoblox_log(

@@ -10,7 +10,7 @@ import sys
 import pytest
 
 import dominion.src.ticket as ticket_mod
-from dominion import Appliance, Ticket, create_logger
+from dominion import Appliance, Checks, LogDump, LogMark, Ticket, create_logger
 from dominion.src.harness import Run
 
 
@@ -49,9 +49,23 @@ class FakeApp:
     def console_session(self):
         yield FakeConsole(self.console_text)
 
-    def dump_infoblox_log(self, dest):
+    log_lines = ["old rid=0\n", "new ipc:bundle rid=1\n", "new other\n"]
+
+    def mark_infoblox_log(self):
+        return LogMark(log_path="/ib.log", line_count=1)
+
+    def dump_infoblox_log(self, dest, since=None, grep=None, fixed=False):
+        rows = self.log_lines[since.line_count:] if since else self.log_lines
+        if grep:
+            rows = [r for r in rows if grep in r]
+        text = "".join(rows)
+        if self.on_call:
+            self.on_call({"kind": "sh", "cmd": f"grep {grep}", "rc": 0,
+                          "stdout": text, "stderr": ""})
+        os.makedirs(os.path.dirname(dest), exist_ok=True)
         with open(dest, "w") as f:
-            f.write("ib log\n")
+            f.write(text)
+        return LogDump(path=dest, text=text)
 
     def __str__(self):
         return f"{self.hostname} ({self.cfg.ip})"
@@ -1277,3 +1291,56 @@ def test_state_comparison_that_raises_fails_the_step(tmp_path):
     assert ran == []
     assert out["p"][0].status == "FAIL"
     assert "TypeError: cannot compare" in read_report(t)
+
+
+# -- nios_log and expect_status ---------------------------------------------------
+
+def test_nios_log_captures_lines_after_the_mark_and_lists_the_grep(tmp_path):
+    t, out = make(tmp_path), {}
+
+    def body(t):
+        c = t.phase("1. connect", t.connect)
+
+        def work():
+            with t.nios_log("ipc:bundle ") as nl:
+                assert nl.lines == []
+            out["nl"] = nl
+
+        t.phase("2. log", work, needs=c)
+
+    code, _ = run_ticket(t, body)
+    assert code == 0
+    assert out["nl"].lines == ["new ipc:bundle rid=1"]
+    assert out["nl"].line_count == 1
+    assert "$ grep ipc:bundle " in section_of(read_report(t), "2. log")
+    assert os.path.exists(os.path.join(t.output_dir, "nios_log", "1.log"))
+
+
+def test_nios_log_lines_are_set_even_when_the_block_raises(tmp_path):
+    t, out = make(tmp_path), {}
+
+    def body(t):
+        c = t.phase("1. connect", t.connect)
+
+        def work():
+            with t.nios_log("new") as nl:
+                out["nl"] = nl
+                raise ValueError("inside")
+
+        out["p"] = t.phase("2. log", work, needs=c)
+
+    code, _ = run_ticket(t, body)
+    assert code == 1
+    assert out["p"].status == "FAIL"
+    assert out["nl"].lines == ["new ipc:bundle rid=1", "new other"]
+
+
+def test_expect_status_records_label_with_body_and_fails_on_mismatch():
+    sink = []
+    c = Checks("t", sink)
+    c.expect_status("apply", 400, 400, "x" * 300)
+    c.expect_status("apply", 400, 200, {"a": 1})
+    assert sink[0]["ok"] and not sink[1]["ok"]
+    assert sink[0]["label"] == f"apply: HTTP status (body {'x' * 200!r})"
+    assert "{'a': 1}" in sink[1]["label"]
+    assert len(c.failures) == 1
