@@ -33,6 +33,7 @@ class FakeContainer:
 
 
 class FakeApp:
+    script = None  # per-capture line lists, popped in order, instead of log_lines
     log_lines = ("old rid=0\n", "new ipc:bundle rid=1\n", "new other\n")
 
     def __init__(self, cfg):
@@ -49,8 +50,11 @@ class FakeApp:
         return LogMark(log_path="/ib.log", line_count=1)
 
     def dump_infoblox_log(self, dest, since=None, grep=None, fixed=False):
-        rows = [r for r in self.log_lines[since.line_count:] if grep in r]
-        text = "".join(rows)
+        if self.script is not None:
+            text = "".join(f"{ln}\n" for ln in self.script.pop(0))
+        else:
+            rows = [r for r in self.log_lines[since.line_count:] if grep in r]
+            text = "".join(rows)
         os.makedirs(os.path.dirname(dest), exist_ok=True)
         with open(dest, "w") as f:
             f.write(text)
@@ -505,3 +509,194 @@ def test_reports_are_written_as_utf8(tmp_path):
     run_ticket(t, body)
     assert "caf\u00e9 \u2713" in read_html(t)
     assert "caf\u00e9 \u2713" in read_report(t)
+
+
+# -- nios_log.log: the chronological file of every captured line -----------------
+# Lines are real ones from NIOS-111696-oplog (vm-48-10, 2026-11-06), shortened.
+
+def L(stamp, rest):
+    prefix = "(2321081 /usr/bin/httpd) one/token_bundle.py:1 f():"
+    return f"[2026/11/06 {stamp}] {prefix} {rest}"
+
+
+BUNDLE = "ipc:bundle rid="
+APPLY_REJECTED = L("21:35:53.524", BUNDLE + "da8bd471 user=admin fn=apply "
+                   "outcome=rejected code=one.token_bundle.NOT_ENABLED dur=0.000s")
+UP_STEP = L("21:36:25.684",
+            BUNDLE + "52ee3558 step=ValidateTokens outcome=ok dur=20.705s")
+UP_EVENT = L("21:36:25.684", BUNDLE + "52ee3558 event=staged total=999999999")
+UP_SUMMARY = L("21:36:25.684",
+               BUNDLE + "52ee3558 user=admin fn=upload outcome=ok dur=20.705s")
+EN_STEP = L("21:36:26.012",
+            BUNDLE + "0f498b0b step=InitTokenMigration outcome=ok dur=0.003s")
+EN_EVENT = L("21:36:26.012",
+             BUNDLE + "0f498b0b event=migration_queued overall_status=NOT_STARTED")
+EN_SUMMARY = L("21:36:26.012",
+               BUNDLE + "0f498b0b user=admin fn=enable outcome=ok dur=0.007s")
+UP_REJECTED = L("21:37:18.642", BUNDLE + "456590f6 user=admin fn=upload "
+                "outcome=rejected code=one.token_bundle.ALREADY_ENABLED dur=0.000s")
+CONTINUATION = "  Traceback continuation without a timestamp"
+
+
+def read_nios_log(t):
+    with open(os.path.join(t.output_dir, "nios_log.log"), encoding="utf-8") as f:
+        return f.read()
+
+
+def flow(box, script, steps):
+    def body(t):
+        c = t.phase("1. connect", t.connect)
+        t.steps(steps(t), probe=box.probe, needs=c,
+                home=("home", "Licenses", box.to("Licenses")))
+    return body
+
+
+def capture(t, pattern="ipc:bundle "):
+    with t.nios_log(pattern):
+        pass
+
+
+def test_nios_log_file_groups_by_section_sorted_with_states_and_results(
+    monkeypatch, tmp_path,
+):
+    box = Box()
+    script = [
+        [APPLY_REJECTED],
+        [EN_STEP, UP_STEP, UP_EVENT, CONTINUATION, UP_SUMMARY, EN_EVENT, EN_SUMMARY],
+        [],
+        [UP_REJECTED],
+    ]
+    monkeypatch.setattr(FakeApp, "script", script)
+
+    def steps(t):
+        return [
+            ("2. apply rejected", "Licenses", "Licenses", lambda: capture(t)),
+            ("3. enable", "Licenses", "IPc", lambda: (capture(t), box.to("IPc")())),
+            ("4. quiet", "IPc", "IPc", lambda: capture(t)),
+            ("5. no capture", "IPc", "IPc", lambda: None),
+            ("6. upload rejected", "IPc", "IPc", lambda: capture(t)),
+        ]
+
+    t = make(tmp_path)
+    code, _ = run_ticket(t, flow(box, script, steps))
+    assert code == 0
+    header = "== {} | {} | PASS 0.0s | {}"
+    assert read_nios_log(t) == "\n\n".join([
+        "\n".join([header.format("2. apply rejected", "Licenses -> Licenses", "1 line"),
+                   APPLY_REJECTED]),
+        "\n".join([header.format("3. enable", "Licenses -> IPc", "7 lines"),
+                   UP_STEP, UP_EVENT, CONTINUATION, UP_SUMMARY,
+                   EN_STEP, EN_EVENT, EN_SUMMARY]),
+        header.format("4. quiet", "IPc -> IPc", "0 lines"),
+        "\n".join([header.format("6. upload rejected", "IPc -> IPc", "1 line"),
+                   UP_REJECTED]),
+    ]) + "\n"
+    assert not script
+
+
+def test_header_without_state_and_failed_result(monkeypatch, tmp_path):
+    monkeypatch.setattr(FakeApp, "script", [[UP_STEP]])
+
+    def body(t):
+        c = t.phase("1. connect", t.connect)
+
+        def work():
+            capture(t)
+            raise ValueError("x")
+
+        t.phase("2. work", work, needs=c)
+
+    t = make(tmp_path)
+    code, _ = run_ticket(t, body)
+    assert code == 1
+    assert read_nios_log(t) == f"== 2. work | FAIL 0.0s | 1 line\n{UP_STEP}\n"
+
+
+def test_no_captures_means_no_file_summary_line_or_link(tmp_path):
+    t = make(tmp_path)
+    _, text = run_ticket(t, lambda t: t.phase("1. connect", t.connect))
+    assert not os.path.exists(os.path.join(t.output_dir, "nios_log.log"))
+    assert "NIOS log:" not in text
+    assert "nios_log.log" not in read_html(t)
+
+
+def test_file_is_written_on_ctrl_c_and_home_still_runs(monkeypatch, tmp_path):
+    monkeypatch.setattr(FakeApp, "script", [[UP_STEP]])
+    box = Box()
+
+    def steps(t):
+        def interrupted():
+            capture(t)
+            raise KeyboardInterrupt
+
+        return [("2. up", "Licenses", "IPc", interrupted)]
+
+    t = make(tmp_path)
+    with pytest.raises(SystemExit), t:
+        flow(box, None, steps)(t)
+    assert read_nios_log(t) == (
+        f"== 2. up | Licenses -> IPc | FAIL 0.0s | 1 line\n{UP_STEP}\n"
+    )
+
+
+def test_summary_line_console_print_and_html_link(monkeypatch, tmp_path, capsys):
+    monkeypatch.setattr(FakeApp, "script", [[UP_STEP, UP_EVENT]])
+
+    def body(t):
+        c = t.phase("1. connect", t.connect)
+        t.phase("2. log", lambda: capture(t), needs=c)
+
+    t = make(tmp_path)
+    _, text = run_ticket(t, body)
+    path = os.path.join(t.output_dir, "nios_log.log")
+    assert f"NIOS log: {path} (2 lines)" in text
+    out = capsys.readouterr().out
+    assert "nios_log.log\n" in out  # listed with the other files
+    tail = out[out.index("RESULTS:"):]
+    assert tail.index(f"NIOS log: {path} (2 lines)") < tail.index("== 2. log")
+    assert tail.rstrip().endswith(UP_EVENT)
+    page = read_html(t)
+    assert '<a href="nios_log.log">nios_log.log</a> (2 lines)' in page
+    with open(os.path.join(t.output_dir, "run.log")) as f:
+        assert "== 2. log" in f.read()
+
+
+def test_console_print_is_capped_with_a_pointer(monkeypatch, tmp_path, capsys):
+    total = 130
+    lines = [L("21:36:25.684", f"ipc:bundle rid={i:08x} fn=x outcome=ok dur=0.001s")
+             for i in range(total)]
+    monkeypatch.setattr(FakeApp, "script", [lines])
+
+    def body(t):
+        c = t.phase("1. connect", t.connect)
+        t.phase("2. log", lambda: capture(t), needs=c)
+
+    t = make(tmp_path)
+    run_ticket(t, body)
+    out = capsys.readouterr().out
+    printed = out[out.index("== 2. log"):].splitlines()
+    cap = 100
+    assert printed[:cap] == read_nios_log(t).splitlines()[:cap]
+    assert printed[cap] == (
+        f"... {total + 1 - cap} more, see {os.path.join(t.output_dir, 'nios_log.log')}"
+    )
+    assert len(read_nios_log(t).splitlines()) == total + 1
+
+
+def test_write_failure_warns_and_does_not_break_the_run(monkeypatch, tmp_path):
+    monkeypatch.setattr(FakeApp, "script", [[UP_STEP]])
+
+    def body(t):
+        c = t.phase("1. connect", t.connect)
+        t.phase("2. log", lambda: capture(t), needs=c)
+
+    def bad(sections):
+        raise RuntimeError("builder bug")
+
+    monkeypatch.setattr(ticket_mod, "_nios_log_text", bad)
+    t = make(tmp_path)
+    code, text = run_ticket(t, body)
+    assert code == 0
+    assert "nios_log.log not written: RuntimeError: builder bug" in text
+    assert os.path.exists(os.path.join(t.output_dir, "junit.xml"))
+    assert "NIOS log:" not in text

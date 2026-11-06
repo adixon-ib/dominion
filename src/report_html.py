@@ -15,6 +15,7 @@ import os
 from . import oplog
 from .container import NiosContainer
 from .ticket import (
+    NIOS_LOG_FILE,
     PACKAGE_DIR,
     _collapse,
     _dump,
@@ -52,6 +53,7 @@ font-size:.8rem;font-weight:600;border:1px solid currentColor}
 margin:8px 0 0;font-size:.9rem}
 .meta dt{color:var(--muted)}.meta dd{margin:0;overflow-wrap:anywhere}
 .counts{margin:6px 0 0;color:var(--muted)}
+.counts a{color:inherit}
 ul{margin:6px 0;padding-left:0;list-style:none}
 li{padding:2px 0;overflow-wrap:anywhere}
 li.failed{background:var(--badbg);border-left:3px solid var(--bad);
@@ -194,10 +196,14 @@ def render(t) -> str:
         ("Dominion", _git_rev(PACKAGE_DIR)),
         ("Run", os.path.basename(t.output_dir.rstrip(os.sep))),
     ]
+    nios_log = ""
+    if t._nios_log_text is not None:
+        nios_log = (f'<div class="counts"><a href="{_e(NIOS_LOG_FILE)}">'
+                    f"{_e(NIOS_LOG_FILE)}</a> ({t._nios_log_count} lines)</div>")
     head = (
         f'<header><h1>{_e(t.name)} <span class="badge {verdict}">{verdict}</span>'
         f'</h1><div class="counts">{run._passed} passed, {run._failed} failed, '
-        f'{run._skipped} skipped</div><dl class="meta">'
+        f'{run._skipped} skipped</div>{nios_log}<dl class="meta">'
         + "".join(f"<dt>{k}</dt><dd>{_e(v)}</dd>" for k, v in meta)
         + "</dl></header>"
     )

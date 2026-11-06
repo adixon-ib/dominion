@@ -152,6 +152,42 @@ class Checks:
         return False
 
 
+NIOS_LOG_FILE = "nios_log.log"
+NIOS_LOG_CONSOLE_LINES = 100
+STAMP_RE = re.compile(r"^\[(\d{4}/\d\d/\d\d \d\d:\d\d:\d\d\.\d{3})\]")
+
+
+def _chronological(lines: list[str]) -> list[str]:
+    """Stable sort by the infoblox.log timestamp. A line without one sorts with
+    the line before it, so it keeps its place."""
+    keyed, key = [], ""
+    for line in lines:
+        m = STAMP_RE.match(line)
+        key = m.group(1) if m else key
+        keyed.append((key, line))
+    return [line for _, line in sorted(keyed, key=lambda kl: kl[0])]
+
+
+def _nios_log_text(sections: list[dict]) -> tuple[str, int] | None:
+    """The captures of every section that called nios_log, grouped by section
+    in run order: (file text, captured line count), or None if there are none."""
+    groups, total = [], 0
+    for sec in sections:
+        if not sec.get("logs"):
+            continue
+        lines = _chronological([ln for cap in sec["logs"] for ln in cap["lines"]])
+        total += len(lines)
+        result = sec["status"]
+        if sec["status"] != "SKIP":
+            result += f" {sec['duration']:.1f}s"
+        parts = [sec["name"]]
+        if sec["state"]:
+            parts.append(_state_path(sec["state"]))
+        parts += [result, f"{len(lines)} line{'' if len(lines) == 1 else 's'}"]
+        groups.append("\n".join([f"== {' | '.join(parts)}", *lines]))
+    return ("\n\n".join(groups) + "\n", total) if groups else None
+
+
 @dataclass
 class NiosLog:
     """infoblox.log lines captured by Ticket.nios_log. lines is set when the
@@ -161,10 +197,13 @@ class NiosLog:
     line_count: int = 0  # infoblox.log length at entry
 
 
-def _state_text(s: dict) -> str:
+def _state_path(s: dict) -> str:
     path = f"-> {_fmt(s['to'])}"
-    if "from" in s:
-        path = f"{_fmt(s['from'])} {path}"
+    return f"{_fmt(s['from'])} {path}" if "from" in s else path
+
+
+def _state_text(s: dict) -> str:
+    path = _state_path(s)
     probed = ", ".join(f"{k}: {_fmt(s[k])}" for k in ("before", "after") if k in s)
     return path + (f" (probed {probed})" if probed else "")
 
@@ -281,6 +320,8 @@ class Ticket:
         self._unmet: list[str] = []
         self._saved: tuple | None = None
         self._nios_logs = 0
+        self._nios_log_text: str | None = None  # file text, once written
+        self._nios_log_count = 0
         self._logfile = None
         self._log = create_logger(name="dominion.ticket")
 
@@ -567,9 +608,11 @@ class Ticket:
             self._run_cleanups()
             self._run_homes()
             self._write_report()
+            self._write_nios_log()
             self._write_html()
             self.run.summary(extra=self._extra(), _allow_no_target=True)
         finally:
+            self._print_nios_log()
             _rebind_log_handlers(sys.stderr, old_err)
             sys.stdout, sys.stderr = old_out, old_err
             self._logfile.close()
@@ -614,6 +657,9 @@ class Ticket:
         return [
             f"host: {self.host or '(none)'}",
             f"dominion {PACKAGE_DIR}: {_git_rev(PACKAGE_DIR)}",
+            *([f"NIOS log: {os.path.join(self.output_dir, NIOS_LOG_FILE)} "
+               f"({self._nios_log_count} lines)"]
+              if self._nios_log_text is not None else []),
             *[f"WARNING: {w}" for w in self._warnings],
             *[f"NOTE: {n}" for n in self._notes],
             *[f"UNMET (exit 1): {u}" for u in self._unmet],
@@ -621,6 +667,32 @@ class Ticket:
 
     def _verdict(self) -> str:
         return "FAIL" if self.run._failed or self._unmet else "PASS"
+
+    def _write_nios_log(self) -> None:
+        """nios_log.log: every line the nios_log captures got, by section. Built
+        from the captures, infoblox.log is not read again. A failure is a warning."""
+        try:
+            built = _nios_log_text(self._sections)
+            if built is None:
+                return
+            text, count = built
+            with open(os.path.join(self.output_dir, NIOS_LOG_FILE), "w",
+                      encoding="utf-8") as f:
+                f.write(text)
+            self._nios_log_text, self._nios_log_count = text, count
+        except Exception as e:
+            self.warn(f"{NIOS_LOG_FILE} not written: {type(e).__name__}: {e}")
+
+    def _print_nios_log(self) -> None:
+        """After the summary: the file, capped to NIOS_LOG_CONSOLE_LINES lines."""
+        if self._nios_log_text is None:
+            return
+        lines = self._nios_log_text.splitlines()
+        print("\n".join(lines[:NIOS_LOG_CONSOLE_LINES]))
+        more = len(lines) - NIOS_LOG_CONSOLE_LINES
+        if more > 0:
+            print(f"... {more} more, see "
+                  f"{os.path.join(self.output_dir, NIOS_LOG_FILE)}")
 
     def _write_html(self) -> None:
         """report.html, from the same data as report.md. A render failure is a
