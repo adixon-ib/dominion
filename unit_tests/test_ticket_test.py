@@ -431,7 +431,8 @@ def test_required_file_skipped_by_deploy_token_py_fails_deploy(box, tmp_path):
 
 def test_optional_missing_files_do_not_fail_when_not_required(box, tmp_path):
     wt = tmp_path / "wt"
-    wt.mkdir()
+    (wt / "sub").mkdir(parents=True)
+    (wt / "sub/need.py").write_text("x")
     FakeApp.skipped = [str(wt / "sub/other.py")]
     cls = make_test(
         box, deploy_groups={"pyabs"}, deploy_files={"gone.py": "/d/gone.py"},
@@ -512,3 +513,45 @@ def test_phase_titles_are_overridable_and_default_output_is_unchanged(box, tmp_p
 def test_default_titles():
     assert (TicketTest.deploy_title, TicketTest.preflight_title,
             TicketTest.home_title) == ("deploy", "preflight", "home")
+
+
+def test_required_path_in_no_manifest_fails_when_not_a_file(box, tmp_path):
+    wt = tmp_path / "wt"
+    wt.mkdir()
+    cls = make_test(box, deploy_groups={"pyabs"}, deploy_required=("typo/need.py",))
+    tt = cls("vm-1", results_dir=str(tmp_path / "r"), worktree=str(wt))
+    assert run(tt) == 1
+    assert "required files absent from the worktree: ['typo/need.py']" in report(tt)
+    assert not [e for e in box.log if e[0] in ("wait_until_ready", "step")]
+
+
+def test_required_path_present_but_in_no_manifest_passes(box, tmp_path):
+    wt = tmp_path / "wt"
+    wt.mkdir()
+    (wt / "x.py").write_text("x")
+    cls = make_test(box, deploy_groups={"pyabs"}, deploy_required=("x.py",))
+    assert run(cls("vm-1", results_dir=str(tmp_path / "r"), worktree=str(wt))) == 0
+
+
+def test_required_without_worktree_fails(box, tmp_path):
+    cls = make_test(box, deploy_groups={"pyabs"}, deploy_required=("x.py",))
+    assert run(cls("vm-1", results_dir=str(tmp_path / "r"))) == 1
+
+
+def test_enable_ipc_failure_keeps_no_token(box, monkeypatch, tmp_path):
+    def boom(app, path):
+        raise RuntimeError("migration failed")
+
+    monkeypatch.setattr(ipc_ticket, "enable_token_mode_wapi", boom)
+    out = []
+
+    def go(self):
+        try:
+            self.enable_ipc()
+        finally:
+            out.append(list(vars(self.state).get("tokens", [])))
+
+    cls = ipc_test(box, home_state="A", go=step("A", "B", "go")(go),
+                   probe=lambda self: box.state)
+    assert run(cls("vm-1", results_dir=str(tmp_path), skip_home=True)) == 1
+    assert out == [[]]

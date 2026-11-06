@@ -57,7 +57,8 @@ class IpcTicketTest(TicketTest):
     def enable_ipc(self, bundle: str | None = None) -> dict:
         """enable_token_mode_wapi with the bundle (default bundle_path): upload,
         enable, poll until done. The upload token is appended to
-        self.state.tokens. Returns the action's result dict."""
+        self.state.tokens, only when the enable succeeds: if it raises, the token
+        is not kept. Returns the action's result dict."""
         result = enable_token_mode_wapi(self.app, self._bundle_path(bundle))
         self._keep_token(result["token"])
         return result

@@ -46,9 +46,9 @@ class TicketTest(abc.ABC):
     deploy_files: ClassVar[dict[str, str]] = {}  # worktree subpath -> container path
     deploy_groups: ClassVar[set[str]] = set()  # deploy_token_py groups, empty = none
     initial_state: ClassVar[dict] = {}  # Ticket(state=...), becomes self.state
-    deploy_title = "deploy"  # phase "2. <deploy_title>"
-    preflight_title = "preflight"  # phase "3. <preflight_title>"
-    home_title = "home"  # the home step, unnumbered
+    deploy_title: ClassVar[str] = "deploy"  # phase "2. <deploy_title>"
+    preflight_title: ClassVar[str] = "preflight"  # phase "3. <preflight_title>"
+    home_title: ClassVar[str] = "home"  # the home step, unnumbered
     deploy_required: ClassVar[tuple[str, ...]] = ()  # worktree subpaths that must exist
 
     def __init__(  # noqa: PLR0913
@@ -89,8 +89,9 @@ class TicketTest(abc.ABC):
     def deploy(self) -> None:
         """Upload deploy_files (md5-checked), deploy deploy_groups, wait for WAPI.
         A file absent from the worktree is noted and not uploaded, unless it is in
-        deploy_required: then the phase fails. The deploy_token_py result is kept
-        in self.deploy_result."""
+        deploy_required: then the phase fails, as it does when a required path is
+        not a file in the worktree after both steps. The deploy_token_py result
+        is kept in self.deploy_result."""
         absent = []
         for sub, dest in self.deploy_files.items():
             if not self.worktree:
@@ -111,7 +112,16 @@ class TicketTest(abc.ABC):
                 [r for r in self.deploy_required
                  if os.path.join(self.worktree, r) in skipped],
             )
+        self._require_files()
         self.app.wapi.wait_until_ready()
+
+    def _require_files(self) -> None:
+        missing = [
+            r for r in self.deploy_required
+            if not (self.worktree and os.path.isfile(os.path.join(self.worktree, r)))
+        ]
+        if missing:
+            raise RuntimeError(f"required files absent from the worktree: {missing}")
 
     def _require_present(self, absent: list[str]) -> None:
         missing = [r for r in self.deploy_required if r in absent]
