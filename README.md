@@ -236,6 +236,10 @@ with Ticket("NIOS-111696-ncc", None, results_dir=DIR, worktree=WORKTREE) as t:
     t.phase("2. unit tests", run, needs=connect)
 ```
 
+### Coverage of the changed lines
+
+`coverage_on(app, include=[...])` (in `dominion.actions`) installs a coverage hook in the container (a `.pth` in `/usr/lib/python3/dist-packages`, a daemon thread saves every 2 s because admin-httpd workers never run atexit) and restarts admin-httpd. `coverage_off(app, out_dir, worktree=, base=)` combines the data, copies `coverage.json` to `out_dir`, moves the `.pth` away, restarts admin-httpd, then intersects the lines changed in `git diff -U0 base..HEAD` with the measured ones and writes `coverage.txt` (per changed file `changed lines run X/Y`, the lines that did not run, files that were not measured) and `changed_lines.json`. Container files map by directory and basename (pyabs, pyutil, wapi, ibap). Every Python process on the box loads the hook during the session (`include` limits what is measured), and on an appliance the ticket test must use `skip_home`: `reset_all` removes the hook.
+
 ### Results
 
 dominion is designed to log every command ran on the appliance. Below is sample output from a run:
