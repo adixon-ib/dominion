@@ -133,6 +133,8 @@ class Checks:
     def oplog_event(
         self, lines, rid: str, name: str, *, tag: str = oplog.TAG, **want,
     ) -> oplog.Line:
+        """See oplog.check_event. Fields named tag, name or rid cannot be asserted
+        through want."""
         return oplog.check_event(self, lines, rid, name, tag=tag, **want)
 
     def oplog_contract(self, lines, *, tag: str = oplog.TAG, **kw) -> None:
@@ -330,7 +332,9 @@ class Ticket:
     def nios_log(self, pattern: str):
         """Capture the infoblox.log lines containing pattern (fixed string)
         written while the block runs. nl.lines is set on exit, also when the
-        block raises. The grep is listed under Calls in report.md."""
+        block raises. The grep is listed under Calls in report.md, which keeps
+        only the last 200 lines of it; the full capture is in
+        <output_dir>/nios_log/N.log."""
         mark = self.app.mark_infoblox_log()
         nl = NiosLog(line_count=mark.line_count)
         self._nios_logs += 1

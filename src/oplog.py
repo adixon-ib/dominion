@@ -118,7 +118,8 @@ def check_event(
     c, lines, rid: str, name: str, *, tag: str = TAG, **want,
 ) -> Line:
     """Exactly one event=name line of request rid. Each key in want must equal
-    the str() of the given value."""
+    the str() of the given value. Fields named tag, name or rid cannot be
+    asserted through want."""
     ev = _one(c, f"event={name} rid={rid}", [
         x for x in parse(lines, tag)
         if x.fields.get("rid") == rid and x.fields.get("event") == name
