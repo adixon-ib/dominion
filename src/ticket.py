@@ -4,17 +4,19 @@
         t.cleanup(lambda: undo(t))
         connect = t.phase("1. connect", t.connect)
         t.phase("2. check", lambda: check(t), needs=connect)
+        t.steps([("3. up", "A", "B", up)], probe=probe, home=("home", "A", down))
 
 Writes run.log (stdout, stderr and logger output), report.md (per phase:
 preconditions, WAPI and shell calls, checks, errors), summary.txt and
 junit.xml under a timestamped directory, and exits the process on leaving the
 block: 1 if any phase, cleanup or the block itself failed or a phase was
-skipped for an unmet `pre` precondition, else 0 (deliberate `skip=` and
-needs-propagated skips do not change it).
+skipped for an unmet `pre` precondition or a step's from-state, else 0
+(deliberate `skip=` and needs-propagated skips do not change it).
 """
 
 from __future__ import annotations
 
+import contextlib
 import copy
 import json
 import logging
@@ -119,6 +121,14 @@ class Checks:
         return False
 
 
+def _state_line(s: dict) -> str:
+    path = f"-> {_fmt(s['to'])}"
+    if "from" in s:
+        path = f"{_fmt(s['from'])} {path}"
+    probed = ", ".join(f"{k}: {_fmt(s[k])}" for k in ("before", "after") if k in s)
+    return f"State: {path}" + (f" (probed {probed})" if probed else "")
+
+
 def _fence(text: str, lang: str = "") -> str:
     ticks = "`" * max(3, max(map(len, re.findall("`+", text)), default=0) + 1)
     return f"{ticks}{lang}\n{text.rstrip(chr(10))}\n{ticks}"
@@ -194,6 +204,7 @@ def _new_section(name: str, pre: list | None = None) -> dict:
     return {
         "name": name, "status": "SKIP", "duration": 0.0, "reason": "", "error": None,
         "pre": pre if pre is not None else [], "calls": [], "checks": [],
+        "state": None,
     }
 
 
@@ -218,6 +229,7 @@ class Ticket:
         self.output_dir = self.run.output_dir
         self._app: Appliance | None = None
         self._cleanups: list[Callable[[], object]] = []
+        self._homes: list[dict] = []
         self._warnings: list[str] = []
         self._notes: list[str] = []
         self._sections: list[dict] = []
@@ -299,6 +311,17 @@ class Ticket:
         self._sections.append(section)
         return r["status"]
 
+    @staticmethod
+    def _unmet_needs(section: dict, needs: Phase | Iterable[Phase]) -> list[str]:
+        deps = [needs] if isinstance(needs, Phase) else list(needs or ())
+        unmet = []
+        for d in deps:
+            if d.status == "FAIL" or (d.status == "SKIP" and d.blocked):
+                state = "failed" if d.status == "FAIL" else "skipped"
+                unmet.append(f"{d.name} ({state})")
+                section["pre"].append((d.name, f"not met ({state})"))
+        return unmet
+
     def phase(
         self,
         name: str,
@@ -311,14 +334,8 @@ class Ticket:
         section = _new_section(name)
         if skip:
             return self._skip(section, skip, blocked=False)
-        deps = [needs] if isinstance(needs, Phase) else list(needs or ())
         pre = list(pre)
-        unmet = []
-        for d in deps:
-            if d.status == "FAIL" or (d.status == "SKIP" and d.blocked):
-                state = "failed" if d.status == "FAIL" else "skipped"
-                unmet.append(f"{d.name} ({state})")
-                section["pre"].append((d.name, f"not met ({state})"))
+        unmet = self._unmet_needs(section, needs)
         if unmet:
             section["pre"] += [(label, "not evaluated") for label, _ in pre]
             return self._skip(section, "needs " + ", ".join(unmet), blocked=True)
@@ -353,6 +370,88 @@ class Ticket:
     @staticmethod
     def _reraise(exc: BaseException):
         raise exc
+
+    def steps(
+        self,
+        steps: Iterable[tuple[str, object, object, Callable[[], object]]],
+        *,
+        probe: Callable[[], object],
+        home: tuple[str, object, Callable[[], object]] | None = None,
+        needs: Phase | Iterable[Phase] = (),
+    ) -> list[Phase]:
+        """Run (name, from_state, to_state, fn) steps against a probed box state.
+
+        Each step gates only on its own probe: a failed step does not block a
+        later step whose from_state the box is in. A step whose from_state is
+        not met is skipped and exits 1 like an unmet `pre`. `home` is
+        (name, state, fn): it runs at the end of the block, after cleanups,
+        once any step has started.
+        """
+        entry = None
+        if home is not None:
+            entry = dict(zip(("name", "state", "fn"), home, strict=True))
+            entry.update(probe=probe, started=False)
+            self._homes.append(entry)
+        return [
+            self._state_step(*s, probe=probe, home=entry, needs=needs) for s in steps
+        ]
+
+    def _probe(self, probe: Callable[[], object]):
+        prev, self._current = self._current, None
+        try:
+            return probe()
+        finally:
+            self._current = prev
+
+    def _probe_after(self, section: dict, probe: Callable[[], object]):
+        try:
+            got = self._probe(probe)
+        except Exception as e:
+            section["state"]["after"] = f"probe failed: {type(e).__name__}: {e}"
+            raise
+        section["state"]["after"] = got
+        return got
+
+    def _state_step(  # noqa: PLR0913
+        self, name, frm, to, fn, *, probe, home, needs,
+    ) -> Phase:
+        section = _new_section(name)
+        section["state"] = {"from": frm, "to": to}
+        label = f"box in {_fmt(frm)}"
+        unmet = self._unmet_needs(section, needs)
+        if unmet:
+            section["pre"].append((label, "not evaluated"))
+            return self._skip(section, "needs " + ", ".join(unmet), blocked=True)
+        try:
+            before = self._probe(probe)
+        except Exception as e:
+            crashed = e
+            section["pre"].append(
+                (label, f"not met (probe failed: {type(e).__name__}: {e})")
+            )
+            return Phase(name, self._step(section, lambda: self._reraise(crashed)))
+        section["state"]["before"] = before
+        if before != frm:
+            section["pre"].append((label, f"not met (box in {_fmt(before)})"))
+            self._unmet.append(f"{name}: {label}")
+            return self._skip(
+                section, f"not met: {label}", blocked=True, unmet=True,
+            )
+        section["pre"].append((label, "met"))
+        if home is not None:
+            home["started"] = True
+
+        def run():
+            try:
+                fn()
+            except Exception:
+                with contextlib.suppress(Exception):
+                    self._probe_after(section, probe)
+                raise
+            with self.checks(name) as c:
+                c.expect(f"box in {_fmt(to)}", to, self._probe_after(section, probe))
+
+        return Phase(name, self._step(section, run))
 
     def cleanup(self, fn: Callable[[], object]) -> None:
         self._cleanups.append(fn)
@@ -393,6 +492,7 @@ class Ticket:
                     lambda: self._raise_from(exc),
                 )
             self._run_cleanups()
+            self._run_homes()
             self._write_report()
             self.run.summary(extra=self._extra(), _allow_no_target=True)
         finally:
@@ -408,6 +508,26 @@ class Ticket:
                 self._skip(section, "not connected", blocked=False)
             else:
                 self._step(section, self._survive(fn))
+
+    def _run_homes(self) -> None:
+        for h in reversed(self._homes):
+            section = _new_section(h["name"])
+            section["state"] = {"to": h["state"]}
+            if not h["started"]:
+                self._skip(section, "no step ran", blocked=False)
+            elif self._app is None:
+                self._skip(section, "not connected", blocked=False)
+            else:
+                run = self._survive(lambda h=h, s=section: self._home(s, h))
+                self._step(section, run)
+
+    def _home(self, section: dict, h: dict) -> None:
+        h["fn"]()
+        with self.checks(h["name"]) as c:
+            c.expect(
+                f"box in {_fmt(h['state'])}", h["state"],
+                self._probe_after(section, h["probe"]),
+            )
 
     def _survive(self, fn: Callable[[], object]) -> Callable[[], object]:
         """Make a BaseException (second Ctrl-C) fail this cleanup, not the rest."""
@@ -444,6 +564,8 @@ class Ticket:
         for sec in self._sections:
             dur = "" if sec["status"] == "SKIP" else f" ({sec['duration']:.1f}s)"
             lines += ["", f"## {sec['name']}  {sec['status']}{dur}"]
+            if sec["state"]:
+                lines += ["", _state_line(sec["state"])]
             if sec["reason"]:
                 lines += ["", f"Skipped: {sec['reason']}"]
             if sec["pre"]:

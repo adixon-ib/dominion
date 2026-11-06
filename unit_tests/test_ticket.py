@@ -937,3 +937,310 @@ def test_state_is_deep_copied_per_ticket(tmp_path):
     assert defaults == {"probes": [], "nested": {"k": [1]}}
     assert b.state.probes == []
     assert b.state.nested == {"k": [1]}
+
+
+# -- steps ------------------------------------------------------------------------
+
+class Box:
+    """A fake box whose state the steps move."""
+
+    def __init__(self, state="Licenses"):
+        self.state = state
+        self.probes = 0
+
+    def probe(self):
+        self.probes += 1
+        return self.state
+
+    def to(self, state):
+        def fn():
+            self.state = state
+        return fn
+
+
+def section_of(report, name):
+    return report.split(f"## {name}")[1].split("\n## ")[0]
+
+
+def test_step_passes_and_reports_state_line(tmp_path):
+    box, out = Box(), {}
+    t = make(tmp_path)
+
+    def body(t):
+        c = t.phase("1. connect", t.connect)
+        out["p"] = t.steps(
+            [("2. up", "Licenses", "IPc", box.to("IPc"))], probe=box.probe, needs=c,
+        )
+
+    code, _ = run_ticket(t, body)
+    report = read_report(t)
+    assert code == 0
+    assert [p.status for p in out["p"]] == ["PASS"]
+    assert "State: Licenses -> IPc (probed before: Licenses, after: IPc)" in report
+    assert "- box in Licenses: met" in report
+    assert "- box in IPc: expected IPc, got IPc  ok" in report
+
+
+def test_step_skips_on_wrong_from_state_and_exits_one(tmp_path):
+    box, ran, out = Box("Other"), [], {}
+    t = make(tmp_path)
+    code, text = run_ticket(t, lambda t: out.update(p=t.steps(
+        [("2. up", "Licenses", "IPc", lambda: ran.append(1))], probe=box.probe,
+    )))
+    report = read_report(t)
+    assert code == 1
+    assert ran == []
+    assert out["p"][0].status == "SKIP"
+    assert out["p"][0].blocked
+    assert "- box in Licenses: not met (box in Other)" in report
+    assert "State: Licenses -> IPc (probed before: Other)" in report
+    assert "UNMET (exit 1): 2. up: box in Licenses" in text
+    _, cases = _junit(t)
+    assert cases["2. up"].find("failure") is not None
+
+
+def test_step_fails_on_wrong_to_state_with_expected_and_actual(tmp_path):
+    box = Box()
+    t = make(tmp_path)
+    code, _ = run_ticket(
+        t, lambda t: t.steps([("2. up", "Licenses", "IPc", box.to("Bad"))],
+                             probe=box.probe),
+    )
+    report = read_report(t)
+    assert code == 1
+    assert "## 2. up  FAIL" in report
+    assert "- box in IPc: expected IPc, got Bad  FAIL" in report
+    assert "(probed before: Licenses, after: Bad)" in report
+
+
+def test_failed_step_does_not_block_later_step_whose_from_state_is_met(tmp_path):
+    box, ran, out = Box("Licenses"), [], {}
+
+    def build():
+        box.state = "IPc"
+        raise RuntimeError("build failed")
+
+    def body(t):
+        out["p"] = t.steps([
+            ("5. build", "Licenses", "IPc", build),
+            ("6. latch", "IPc", "IPc", lambda: ran.append(6)),
+            ("7. wait", "IPc", "IPc", lambda: ran.append(7)),
+        ], probe=box.probe)
+
+    code, _ = run_ticket(make(tmp_path), body)
+    assert code == 1
+    assert ran == [6, 7]
+    assert [p.status for p in out["p"]] == ["FAIL", "PASS", "PASS"]
+
+
+def test_failed_step_records_after_probe_and_probe_error_does_not_mask(tmp_path):
+    box = Box()
+
+    def fn():
+        box.state = "Half"
+        raise ValueError("step broke")
+
+    t = make(tmp_path)
+    run_ticket(t, lambda t: t.steps([("2. a", "Licenses", "IPc", fn)],
+                                    probe=box.probe))
+    assert "after: Half)" in read_report(t)
+
+    calls = []
+
+    def probe():
+        if calls:
+            raise OSError("gone")
+        calls.append(1)
+        return "Licenses"
+
+    t2 = make(tmp_path / "b")
+    run_ticket(t2, lambda t: t.steps([("2. a", "Licenses", "IPc", boom)],
+                                     probe=probe))
+    report = read_report(t2)
+    assert "ValueError: boom" in report
+    assert "after: probe failed: OSError: gone)" in report
+
+
+def test_probe_raising_before_fails_the_step_without_running_fn(tmp_path):
+    ran = []
+
+    def probe():
+        raise OSError("no route")
+
+    t = make(tmp_path)
+    code, _ = run_ticket(t, lambda t: t.steps(
+        [("2. a", "Licenses", "IPc", lambda: ran.append(1))], probe=probe,
+    ))
+    report = read_report(t)
+    assert code == 1
+    assert ran == []
+    assert "## 2. a  FAIL" in report
+    assert "not met (probe failed: OSError: no route)" in report
+
+
+def test_probe_calls_are_not_in_calls(tmp_path):
+    box = Box()
+    t = make(tmp_path)
+
+    def probe():
+        t.container.sh("probe cmd")
+        return box.state
+
+    def body(t):
+        t.connect()
+        t.steps([("2. a", "Licenses", "IPc",
+                  lambda: (t.container.sh("do it"), box.to("IPc")()))],
+                probe=probe)
+
+    run_ticket(t, body)
+    report = read_report(t)
+    assert "$ do it" in report
+    assert "probe cmd" not in report
+
+
+def test_home_runs_after_failed_step_and_is_last_after_cleanup(tmp_path):
+    box, order = Box(), []
+
+    def body(t):
+        t.cleanup(lambda: order.append("cleanup"))
+        c = t.phase("1. connect", t.connect)
+        t.steps(
+            [("2. up", "Licenses", "IPc", boom)], probe=box.probe, needs=c,
+            home=("home", "Licenses", lambda: order.append("home")),
+        )
+
+    t = make(tmp_path)
+    code, _ = run_ticket(t, body)
+    report = read_report(t)
+    assert code == 1
+    assert order == ["cleanup", "home"]
+    heads = re.findall(r"^## (.+?)  ", report, re.M)
+    assert heads == ["1. connect", "2. up", "cleanup", "home"]
+    assert "State: -> Licenses (probed after: Licenses)" in section_of(report, "home")
+
+
+def test_home_runs_after_keyboard_interrupt_inside_step(tmp_path):
+    box, order = Box(), []
+
+    def interrupted():
+        raise KeyboardInterrupt
+
+    def body(t):
+        t.connect()
+        t.steps(
+            [("2. up", "Licenses", "IPc", interrupted)], probe=box.probe,
+            home=("home", "Licenses", lambda: order.append("home")),
+        )
+
+    t = make(tmp_path)
+    code, text = run_ticket(t, body)
+    assert code == 1
+    assert order == ["home"]
+    assert "FAIL  interrupted: KeyboardInterrupt" in text
+    assert "PASS  home" in text
+
+
+def test_home_fails_with_expected_and_actual(tmp_path):
+    box = Box()
+    t = make(tmp_path)
+
+    def body(t):
+        t.connect()
+        t.steps([("2. up", "Licenses", "IPc", box.to("IPc"))], probe=box.probe,
+                home=("home", "Licenses", lambda: None))
+
+    code, _ = run_ticket(t, body)
+    assert code == 1
+    assert "- box in Licenses: expected Licenses, got IPc  FAIL" in read_report(t)
+
+
+def test_second_interrupt_in_home_fails_it_not_the_exit(tmp_path):
+    box = Box()
+
+    def body(t):
+        t.connect()
+        t.steps([("2. up", "Licenses", "IPc", box.to("IPc"))], probe=box.probe,
+                home=("home", "Licenses", interrupted_fn))
+
+    def interrupted_fn():
+        raise KeyboardInterrupt
+
+    t = make(tmp_path)
+    code, text = run_ticket(t, body)
+    assert code == 1
+    assert "FAIL  home" in text
+    assert os.path.isfile(os.path.join(t.output_dir, "junit.xml"))
+
+
+def test_blocked_steps_skip_without_probing_and_home_is_deliberate_skip(tmp_path):
+    box, ran, out = Box(), [], {}
+
+    def body(t):
+        bad = t.phase("1. connect", boom)
+        out["p"] = t.steps(
+            [("2. a", "Licenses", "IPc", lambda: ran.append(1)),
+             ("3. b", "IPc", "IPc", lambda: ran.append(2))],
+            probe=box.probe, needs=bad,
+            home=("home", "Licenses", lambda: ran.append("home")),
+        )
+
+    t = make(tmp_path)
+    code, text = run_ticket(t, body)
+    report = read_report(t)
+    assert code == 1
+    assert ran == []
+    assert box.probes == 0
+    assert [(p.status, p.blocked) for p in out["p"]] == [("SKIP", True)] * 2
+    assert out["p"][0].reason == "needs 1. connect (failed)"
+    assert "- 1. connect: not met (failed)\n- box in Licenses: not evaluated" in report
+    assert "SKIP  home" in text
+    assert "Skipped: no step ran" in section_of(report, "home")
+    assert "UNMET" not in text
+
+
+def test_all_steps_unmet_from_state_still_shows_home_skip(tmp_path):
+    box = Box("Other")
+    t = make(tmp_path)
+    run_ticket(t, lambda t: t.steps(
+        [("2. a", "Licenses", "IPc", boom)], probe=box.probe,
+        home=("home", "Licenses", boom),
+    ))
+    assert "Skipped: no step ran" in section_of(read_report(t), "home")
+
+
+def test_home_skipped_when_not_connected(tmp_path):
+    box, ran = Box(), []
+    t = make(tmp_path, host=None)
+
+    def body(t):
+        c = t.phase("1. connect", t.connect)
+        t.steps([("2. up", "Licenses", "IPc", box.to("IPc"))], probe=box.probe,
+                home=("home", "Licenses", lambda: ran.append(1)), needs=[])
+        assert c.status == "FAIL"
+
+    code, text = run_ticket(t, body)
+    assert code == 1
+    assert ran == []
+    assert "SKIP  home" in text
+    assert "Skipped: not connected" in section_of(read_report(t), "home")
+
+
+def test_multiple_homes_run_in_reverse_registration_order(tmp_path):
+    box, order = Box(), []
+
+    def body(t):
+        t.connect()
+        for n in ("a", "b"):
+            t.steps([(f"step {n}", "Licenses", "Licenses", lambda: None)],
+                    probe=box.probe, home=(f"home {n}", "Licenses",
+                                           lambda n=n: order.append(n)))
+
+    code, _ = run_ticket(make(tmp_path), body)
+    assert code == 0
+    assert order == ["b", "a"]
+
+
+def test_phase_section_has_no_state_line(tmp_path):
+    t = make(tmp_path)
+    run_ticket(t, lambda t: t.phase("1. connect", t.connect))
+    assert "State:" not in read_report(t)
