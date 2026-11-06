@@ -20,14 +20,18 @@ hook. A session needs a clean worktree at HEAD, the line numbers come from it.
 
 from __future__ import annotations
 
+import base64
+import io
 import json
 import os
 import re
 import shlex
 import subprocess
+import tarfile
 import time
 from dataclasses import dataclass, field
 
+from dominion.actions.coverage_page import HTML_DIR, render
 from dominion.src.deploy import CONTAINER_IBAP, CONTAINER_PYABS, CONTAINER_WAPI
 
 COV_DIR = "/tmp/cov"
@@ -37,6 +41,7 @@ HOOK_MODULE = "dominion_cov_hook"
 HOOK_FILE = f"{COV_DIR}/{HOOK_MODULE}.py"
 PTH_FILE = "/usr/lib/python3/dist-packages/zz_dominion_cov.pth"
 JSON_FILE = f"{COV_DIR}/coverage.json"
+HTML_SRC = f"{COV_DIR}/html"
 FLUSH_WAIT = 3  # seconds: the saver thread saves every 2
 STEP_TIMEOUT = 300
 
@@ -80,6 +85,7 @@ class FileCoverage:
     run: int  # changed lines that ran
     total: int  # changed lines that are executable
     missing: list[int] = field(default_factory=list)  # changed lines that did not run
+    ran: list[int] = field(default_factory=list)  # changed lines that ran
 
 
 @dataclass
@@ -89,6 +95,8 @@ class CoverageResult:
     coverage_json: str
     coverage_txt: str
     changed_lines_json: str
+    coverage_html: str = ""  # coverage.html, the changed hunks
+    coverage_html_dir: str = ""  # coverage's own report
 
 
 def _container(target):
@@ -117,11 +125,13 @@ def coverage_on(target, include: list[str]) -> None:
 
 def coverage_off(target, out_dir: str, *, worktree: str, base: str) -> CoverageResult:
     """End the session: flush, stop admin-httpd, combine the data, copy
-    coverage.json to out_dir, move the .pth to /tmp/cov (mv, not rm), start
-    admin-httpd. Then, on the host, intersect the lines changed between base and
-    HEAD of worktree with the measured ones and write coverage.txt and
-    changed_lines.json next to coverage.json. The hook is removed and admin-httpd
-    restarted even if combine fails."""
+    coverage.json and coverage's own html report (coverage_html/) to out_dir, move
+    the .pth to /tmp/cov (mv, not rm), start admin-httpd. Then, on the host,
+    intersect the lines changed between base and HEAD of worktree with the
+    measured ones and write coverage.txt, coverage.html (the changed hunks,
+    green where they ran, red where not) and changed_lines.json next to
+    coverage.json. The hook is removed and admin-httpd restarted even if combine
+    fails."""
     c = _container(target)
     time.sleep(FLUSH_WAIT)
     c.stop_admin_httpd()
@@ -129,7 +139,12 @@ def coverage_off(target, out_dir: str, *, worktree: str, base: str) -> CoverageR
         env = f"COVERAGE_RCFILE={RC_FILE}"
         c.sh(f"{env} python3 -m coverage combine --keep", timeout=STEP_TIMEOUT)
         c.sh(f"{env} python3 -m coverage json -o {JSON_FILE}", timeout=STEP_TIMEOUT)
+        c.sh(f"{env} python3 -m coverage html -d {HTML_SRC}", timeout=STEP_TIMEOUT)
         _, raw, _ = c.sh(f"cat {JSON_FILE}", timeout=STEP_TIMEOUT, report_lines=20)
+        _, packed, _ = c.sh(
+            f"tar -C {HTML_SRC} -czf - . | base64",
+            timeout=STEP_TIMEOUT, report_lines=20,
+        )
     finally:
         c.sh(f"mv {PTH_FILE} {COV_DIR}/", check=False)
         c.start_admin_httpd()
@@ -144,10 +159,54 @@ def coverage_off(target, out_dir: str, *, worktree: str, base: str) -> CoverageR
     with open(changed_json, "w", encoding="utf-8") as f:
         json.dump(changed, f, indent=2, sort_keys=True)
     files, not_measured = intersect(changed, measured)
+    html_dir = os.path.join(out_dir, HTML_DIR)
+    unpack(packed, html_dir)
+    pages = html_pages(html_dir, files)
     txt = os.path.join(out_dir, "coverage.txt")
     with open(txt, "w", encoding="utf-8") as f:
-        f.write(report(files, not_measured, worktree))
-    return CoverageResult(files, not_measured, coverage_json, txt, changed_json)
+        f.write(report(files, not_measured, worktree, list(measured)))
+    page = os.path.join(out_dir, "coverage.html")
+    with open(page, "w", encoding="utf-8") as f:
+        f.write(render(files, changed, not_measured, base=base, worktree=worktree,
+                       pages=pages))
+    return CoverageResult(
+        files, not_measured, coverage_json, txt, changed_json, page, html_dir,
+    )
+
+
+def unpack(packed: str, dest: str) -> None:
+    """Extract the base64 tar.gz of coverage's html folder into dest. Only plain
+    files directly named inside the archive are written, page names unchanged."""
+    os.makedirs(dest, exist_ok=True)
+    data = base64.b64decode(packed)
+    with tarfile.open(fileobj=io.BytesIO(data), mode="r:gz") as tar:
+        for m in tar.getmembers():
+            name = os.path.normpath(m.name)
+            if not m.isfile() or name.startswith(("..", "/")):
+                continue
+            target = os.path.join(dest, name)
+            os.makedirs(os.path.dirname(target), exist_ok=True)
+            with open(target, "wb") as f:
+                f.write(tar.extractfile(m).read())
+
+
+INDEX_LINK_RE = re.compile(r'<td class="name left"><a href="([^"]+)">([^<]+)</a>')
+
+
+def html_pages(html_dir: str, files: dict) -> dict[str, str]:
+    """worktree path -> href of coverage's page for it, read from coverage's own
+    index.html (the page names are hashed, not guessed)."""
+    try:
+        with open(os.path.join(html_dir, "index.html"), encoding="utf-8") as f:
+            index = {name: href for href, name in INDEX_LINK_RE.findall(f.read())}
+    except OSError:
+        return {}
+    pages = {}
+    for path in files:
+        href = lookup(index, container_path(path) or "")
+        if href:
+            pages[path] = f"{HTML_DIR}/{href}"
+    return pages
 
 
 def git_diff(worktree: str, base: str) -> str:
@@ -184,6 +243,17 @@ def container_path(path: str) -> str | None:
     return f"{base}/{os.path.basename(path)}" if base else None
 
 
+def lookup(table: dict, path: str):
+    """table[path], or the entry of a key that ends with path (coverage may record
+    a longer path), or of a key path ends with (a shorter, relative one)."""
+    if path in table:
+        return table[path]
+    for key, value in table.items():
+        if path and (key.endswith(path) or path.endswith("/" + key.lstrip("/"))):
+            return value
+    return None
+
+
 def intersect(
     changed: dict[str, list[int]], measured: dict,
 ) -> tuple[dict[str, FileCoverage], list[str]]:
@@ -191,7 +261,7 @@ def intersect(
     for path, lines in sorted(changed.items()):
         if not path.endswith(".py"):
             continue
-        data = measured.get(container_path(path) or "")
+        data = lookup(measured, container_path(path) or "")
         if data is None:
             not_measured.append(path)
             continue
@@ -200,14 +270,24 @@ def intersect(
             run=len(ran & set(lines)),
             total=len((ran | missing) & set(lines)),
             missing=sorted(missing & set(lines)),
+            ran=sorted(ran & set(lines)),
         )
     return files, not_measured
 
 
 def report(
     files: dict[str, FileCoverage], not_measured: list[str], worktree: str,
+    measured_keys: list[str] = (),
 ) -> str:
     out = []
+    if not files and not not_measured:
+        out.append("no changed .py files")
+    if not files and not_measured:
+        shown = ", ".join(measured_keys[:3]) or "none"
+        out.append(
+            f"NOTE: no measured file matched the {len(not_measured)} changed .py "
+            f"file(s). coverage.json has {len(measured_keys)} file(s), e.g.: {shown}"
+        )
     for path, fc in files.items():
         out.append(f"{path}: changed lines run {fc.run}/{fc.total}")
         try:
