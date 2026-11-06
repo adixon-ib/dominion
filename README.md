@@ -165,6 +165,17 @@ def member_latch(t):
         c.expect("upsize_status", "OVERAGE_UPSIZE", rows[0]["upsize_status"])
 ```
 
+For a multi-step flow over a box with observable state, `t.steps` runs `(name, from_state, to_state, fn)` steps in order. Each step gates only on its own `probe()` (a failed step does not block a later step whose from-state the box is in), asserts the probed state after `fn`, and shows `State: A -> B (probed before: A, after: B)` in `report.md`. A step whose from-state is not met is skipped and exits 1, like an unmet `pre`. `home=(name, state, fn)` runs last, after cleanups, and must leave the box in `state`. `needs=` works as in `phase`. Probe calls are not listed under Calls.
+
+```python
+t.steps(
+    [("5. build", "Licenses", "IPc", lambda: build(t)),
+     ("6. latch", "IPc", "IPc", lambda: latch(t))],
+    probe=lambda: box_state(t), needs=connect,
+    home=("home", "Licenses", lambda: reset(t)),
+)
+```
+
 A phase is skipped (and its dependants with it) when a `needs` phase failed or was skipped, or a `pre` precondition is unmet. A `skip=` reason is a deliberate skip: it does not block dependants or change the exit code. An unmet `pre` shows as SKIP but exits 1. `Ticket(..., state={...})` gives `t.state`, a namespace for values shared between phases; its fields are listed in `report.md` under "State at exit". Use `t.container.sh(cmd)` for shell commands in the NIOS container. Request bodies, sh commands and responses are recorded as given, with no masking, so keep secrets out of them.
 
 ### Results
