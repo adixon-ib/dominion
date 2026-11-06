@@ -119,6 +119,12 @@ class Checks:
         """See oplog.check_summary: fn=, outcome=, code_suffix=, user=."""
         return oplog.check_summary(self, lines, tag=tag, **kw)
 
+    def oplog_count(
+        self, lines, n: int, fn: str | None = None, *, tag: str = oplog.TAG,
+    ) -> None:
+        """Exactly n summary lines, only those for fn when given."""
+        oplog.check_count(self, lines, n, fn=fn, tag=tag)
+
     def oplog_step(
         self, lines, rid: str, name: str, *, tag: str = oplog.TAG,
     ) -> oplog.Line:
@@ -130,7 +136,7 @@ class Checks:
         return oplog.check_event(self, lines, rid, name, tag=tag, **want)
 
     def oplog_contract(self, lines, *, tag: str = oplog.TAG, **kw) -> None:
-        """See oplog.check_contract: caller_file=, secrets=."""
+        """See oplog.check_contract: caller_file=, secrets=, labels=."""
         oplog.check_contract(self, lines, tag=tag, **kw)
 
     def __enter__(self):

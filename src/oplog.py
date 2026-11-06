@@ -92,6 +92,16 @@ def check_summary(  # noqa: PLR0913
     return s
 
 
+def check_count(
+    c, lines, n: int, *, fn: str | None = None, tag: str = TAG,
+) -> None:
+    """Exactly n summary lines (lines with fn=), only those for fn when given."""
+    label = "summary lines" if fn is None else f"summary fn={fn} lines"
+    got = [x for x in parse(lines, tag)
+           if "fn" in x.fields and (fn is None or x.fields["fn"] == fn)]
+    c.expect(f"{label}: count", n, len(got))
+
+
 def check_step(c, lines, rid: str, name: str, *, tag: str = TAG) -> Line:
     """Exactly one step=name line of request rid, outcome ok, with a duration."""
     label = f"step={name} rid={rid}"
@@ -118,19 +128,38 @@ def check_event(
     return ev
 
 
-def check_contract(
+CONTRACT_KINDS = ("caller", "rid", "secret", "tb")
+
+
+def check_contract(  # noqa: PLR0913
     c, lines, *, caller_file: str, secrets: Iterable[str] = (), tag: str = TAG,
+    labels: dict[str, str] | None = None,
 ) -> None:
     """Over all lines: written by caller_file, rid format, no secret and no
-    tb= (traceback) field. One check each; got is the list of offending lines."""
+    tb= (traceback) field. One check each; got is the list of offending lines.
+
+    labels maps a check kind to a prefix, rendered as "<prefix>: <label>", e.g.
+    {"caller": "criterion 7"}. Kinds: caller (lines from caller_file), rid (rid
+    format), secret (no secret in a line), tb (no tb= field). An unknown kind
+    raises ValueError."""
+    labels = labels or {}
+    unknown = sorted(set(labels) - set(CONTRACT_KINDS))
+    if unknown:
+        raise ValueError(
+            f"unknown oplog_contract label kinds {unknown}, use {CONTRACT_KINDS}"
+        )
+
+    def name(kind: str, text: str) -> str:
+        return f"{labels[kind]}: {text}" if kind in labels else text
+
     rows = parse(lines, tag)
     chunks = [s.split()[0][:SECRET_CHUNK] for s in secrets if s.split()]
     n = len(rows)
-    c.expect(f"all {n} lines from {caller_file}", [],
+    c.expect(name("caller", f"all {n} lines from {caller_file}"), [],
              [x.raw for x in rows if not x.file.endswith(caller_file)])
-    c.expect(f"rid: all {n} lines 8 lowercase hex", [],
+    c.expect(name("rid", f"rid: all {n} lines 8 lowercase hex"), [],
              [x.raw for x in rows if not RID_RE.match(x.fields.get("rid", ""))])
-    c.expect(f"no secret in {n} lines", [],
+    c.expect(name("secret", f"no secret in {n} lines"), [],
              [x.raw for x in rows if any(k in x.raw for k in chunks)])
-    c.expect(f"no tb= field in {n} lines", [],
+    c.expect(name("tb", f"no tb= field in {n} lines"), [],
              [x.raw for x in rows if "tb" in x.fields])

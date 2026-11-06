@@ -55,7 +55,10 @@ def test_success_polls_until_completed(app):
 
     result = enable_token_mode_wapi(app, "b.tar")
 
-    assert result == {"upload": {"uid": "u", "total": 5}, "status": done, "bundle": [{"uid": "u"}]}
+    assert result == {
+        "upload": {"uid": "u", "total": 5}, "status": done,
+        "bundle": [{"uid": "u"}], "token": "tok",
+    }
     app.wapi.post.assert_any_call("ipc:bundle?_function=upload", {"token": "tok"})
     app.wapi.get.assert_called_once_with("ipc:bundle")
 
@@ -257,3 +260,8 @@ def test_upload_bundle_token_cleans_up_when_upload_fails(lpc_app, tmp_path):
 
 def test_private_patched_bundle_alias_kept():
     assert token_enable._patched_bundle is token_enable.patched_bundle
+
+
+def test_bundle_object_exported_from_actions():
+    from dominion.actions import BUNDLE_OBJECT
+    assert BUNDLE_OBJECT == "ipc:bundle"

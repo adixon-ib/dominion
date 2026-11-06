@@ -1,6 +1,8 @@
 """Unit tests for oplog.py: parse and the Checks.oplog_* methods, on real lines
 from NIOS-111696-oplog (infoblox.log of vm-48-10, 2026-11-06)."""
 
+import pytest
+
 from dominion import Checks
 from dominion.src import oplog
 
@@ -208,3 +210,57 @@ def test_tag_argument_selects_the_tag_in_every_check():
     assert not c.failures
     c, _ = run(lambda c: c.oplog_summary(swap, fn="upload", outcome="ok"))
     assert c.failures  # default tag finds nothing
+
+
+def test_count_all_summaries_or_only_fn():
+    c, _ = run(lambda c: c.oplog_count(LINES, 2))
+    assert not c.failures
+    c, _ = run(lambda c: c.oplog_count(LINES, 1, fn="apply"))
+    assert not c.failures
+    c, _ = run(lambda c: c.oplog_count(LINES, 0, fn="status"))
+    assert not c.failures
+    c, _ = run(lambda c: c.oplog_count(LINES, 1))
+    assert c.failures == ["summary lines: count: expected 1, got 2"]
+    c, _ = run(lambda c: c.oplog_count(LINES, 2, fn="apply"))
+    assert c.failures == ["summary fn=apply lines: count: expected 2, got 1"]
+
+
+def test_count_ignores_untagged_lines_and_takes_tag():
+    swap = [x.replace("ipc:bundle ", "other:tag ") for x in LINES]
+    c, _ = run(lambda c: c.oplog_count(swap, 2, tag="other:tag"))
+    assert not c.failures
+    c, _ = run(lambda c: c.oplog_count(swap, 0))
+    assert not c.failures
+
+
+def test_contract_labels_prefix_each_kind():
+    bad = REJECT.replace("rid=6a0638b9", "rid=BAD").replace(
+        "one/token_bundle.py", "one/x.py") + ' tb="t" AAAA'
+    labels = {"caller": "criterion 7", "rid": "criterion R",
+              "secret": "criterion 6", "tb": "criterion T"}
+    c, sink = run(lambda c: c.oplog_contract(
+        [bad], caller_file="token_bundle.py", secrets=["AAAA"], labels=labels))
+    assert [e["label"] for e in sink] == [
+        "criterion 7: all 1 lines from token_bundle.py",
+        "criterion R: rid: all 1 lines 8 lowercase hex",
+        "criterion 6: no secret in 1 lines",
+        "criterion T: no tb= field in 1 lines",
+    ]
+    assert len(c.failures) == 4
+
+
+def test_contract_partial_labels_leave_others_alone():
+    _, sink = run(lambda c: c.oplog_contract(
+        LINES, caller_file="token_bundle.py", labels={"secret": "criterion 6"}))
+    assert [e["label"] for e in sink] == [
+        "all 4 lines from token_bundle.py",
+        "rid: all 4 lines 8 lowercase hex",
+        "criterion 6: no secret in 4 lines",
+        "no tb= field in 4 lines",
+    ]
+
+
+def test_contract_unknown_label_kind_raises():
+    with pytest.raises(ValueError, match="unknown oplog_contract label kinds"):
+        run(lambda c: c.oplog_contract(
+            LINES, caller_file="token_bundle.py", labels={"dur": "x"}))

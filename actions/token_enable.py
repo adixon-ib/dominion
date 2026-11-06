@@ -22,6 +22,7 @@ if TYPE_CHECKING:
 
 _REQUIRED_MEMBERS = ("tab.json", "docker-compose.yml", "usage_calculator")
 _REMOTE_BUNDLE_PATH = "/storage/tmp/token_bundle.tar"
+BUNDLE_OBJECT = "ipc:bundle"  # WAPI object of the token bundle
 _AIRGAPPED_FLAG = "/infoblox/var/flags/airgapped_skip"
 
 
@@ -183,7 +184,8 @@ def enable_token_mode_wapi(
         timeout: Seconds to wait for the migration to finish.
 
     Returns:
-        {"upload": upload result, "status": final status, "bundle": GET ipc:bundle}.
+        {"upload": upload result, "status": final status, "bundle": GET ipc:bundle,
+        "token": the fileop upload token}.
 
     Raises:
         FileNotFoundError: If bundle_path does not exist.
@@ -198,10 +200,10 @@ def enable_token_mode_wapi(
 
     try:
         log.info("ipc:bundle upload")
-        uploaded = app.wapi.post("ipc:bundle?_function=upload", {"token": token})
+        uploaded = app.wapi.post(f"{BUNDLE_OBJECT}?_function=upload", {"token": token})
         log.info("Bundle accepted: %s", uploaded)
         log.info("ipc:bundle enable")
-        status = app.wapi.post("ipc:bundle?_function=enable", {})
+        status = app.wapi.post(f"{BUNDLE_OBJECT}?_function=enable", {})
     except WapiError as e:
         raise RuntimeError(f"ipc:bundle on {app.hostname} rejected: {e}") from e
 
@@ -218,7 +220,7 @@ def enable_token_mode_wapi(
             )
         time.sleep(NIOS_WAPI_POLL_INTERVAL)
         try:
-            status = app.wapi.post("ipc:bundle?_function=status", {})
+            status = app.wapi.post(f"{BUNDLE_OBJECT}?_function=status", {})
         except WapiError as e:
             if e.status != 0 and e.status < 500:
                 raise
@@ -234,5 +236,6 @@ def enable_token_mode_wapi(
     return {
         "upload": uploaded,
         "status": status,
-        "bundle": app.wapi.get("ipc:bundle"),
+        "bundle": app.wapi.get(BUNDLE_OBJECT),
+        "token": token,
     }

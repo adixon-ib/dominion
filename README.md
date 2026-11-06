@@ -182,8 +182,8 @@ Helpers for ticket tests:
 
 - `with t.nios_log("ipc:bundle ") as nl:` marks infoblox.log, then `nl.lines` holds the lines containing the fixed string written inside the block (set also when the block raises). The grep is listed under Calls.
 - `c.expect_status(label, want, status, body)` checks an HTTP status and shows the body start in the label.
-- `c.oplog_summary / oplog_step / oplog_event / oplog_contract` check NIOS `oplog` request lines (`src/oplog.py`, `oplog.parse(lines, tag)`). The line format comes from a NIOS change that is not merged yet and may change.
-- `app.usage_mode()` returns `"Licenses"` or `"IPc"`. `container.upload_file(src, dest)` uploads, cleans stale `.pyc`/`.pys` and verifies the md5 (`DeployError` with both hashes). `app.wapi.request(..., timeout=)` overrides the transport timeout for one call. `patched_bundle` and `upload_bundle_token(app, path)` (in `dominion.actions`) patch the token bundle with the grid's `lpc_uid` and upload it with fileop.
+- `c.oplog_summary / oplog_count / oplog_step / oplog_event / oplog_contract` (`oplog_contract(..., labels={"caller": "criterion 7"})` prefixes check labels; kinds caller, rid, secret, tb) check NIOS `oplog` request lines (`src/oplog.py`, `oplog.parse(lines, tag)`). The line format comes from a NIOS change that is not merged yet and may change.
+- `app.usage_mode()` returns `"Licenses"` or `"IPc"`. `container.upload_file(src, dest)` uploads, cleans stale `.pyc`/`.pys` and verifies the md5 (`DeployError` with both hashes). `app.wapi.request(..., timeout=)` overrides the transport timeout for one call. `patched_bundle` and `upload_bundle_token(app, path)` (in `dominion.actions`) patch the token bundle with the grid's `lpc_uid` and upload it with fileop. `enable_token_mode_wapi` also returns the upload `"token"`. `BUNDLE_OBJECT` (`"ipc:bundle"`) is exported from `dominion.actions`.
 - `container.dump_log` and `count_log` appear under Calls like `sh`. `dump_log(..., fixed=True)` greps a fixed string.
 
 ### Results

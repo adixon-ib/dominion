@@ -10,6 +10,7 @@ from .appliance_reset_all import reset_all
 from .grid_join import join_grid
 from .grid_leave import leave_grid
 from .token_enable import (
+    BUNDLE_OBJECT,
     enable_token_mode,
     enable_token_mode_wapi,
     patched_bundle,
@@ -17,6 +18,7 @@ from .token_enable import (
 )
 
 __all__ = [
+    "BUNDLE_OBJECT",
     "enable_token_mode",
     "enable_token_mode_wapi",
     "join_grid",
