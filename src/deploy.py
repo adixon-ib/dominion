@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 import shlex
 import shutil
 import tempfile
@@ -62,6 +63,10 @@ WAPI_FILES = [
 ]
 
 IBAP_FILES = ["tokenobj.py", "tokenfuncs.py"]
+
+CONTAINER_TESTS_PYLIB = "/infoblox/tests/lib/python/infoblox/test"
+TEST_PRODUCT_PREFIX = "products/one/"
+TEST_DEFAULT_SUBDIR = "one"  # products/one/mk/Makefile.include: PY_TEST_SUBDIR ?= one
 
 CONTAINER_PYABS = "/infoblox/one/lib/python/infoblox/one"
 CONTAINER_WAPI = "/infoblox/one/lib/python/infoblox/one/wapi"
@@ -397,6 +402,53 @@ class DeployMixin:
                 "groups": sorted(groups),
                 "skipped": skipped,
             },
+        )
+
+    # -- deploy: unit test modules -----------------------------------------
+
+    def _test_dest(self, subpath: str) -> str:
+        """Container path of a NIOS test file, from its test directory's Makefile.
+
+        mk/Makefile.common installs to INSTALL_TESTS_PYLIB_DIR =
+        /infoblox/tests/lib/python/infoblox/test/$(PY_TEST_SUBDIR). The
+        directory's Makefile sets PY_TEST_SUBDIR (wapi/test: one/wapi), else
+        products/one/mk/Makefile.include gives `one`.
+        """
+        if not subpath.startswith(TEST_PRODUCT_PREFIX):
+            raise DeployError(
+                f"{subpath}: only tests under {TEST_PRODUCT_PREFIX} are mapped",
+                artifact=subpath,
+            )
+        makefile = self._resolve_worktree(
+            os.path.join(os.path.dirname(subpath), "Makefile"),
+        )
+        try:
+            with open(makefile) as f:
+                text = f.read()
+        except OSError as e:
+            raise DeployError(
+                f"no Makefile for {subpath}: {e}", artifact=subpath,
+            ) from e
+        m = re.search(r"^PY_TEST_SUBDIR\s*=\s*(\S*)", text, re.M)
+        subdir = m.group(1) if m else TEST_DEFAULT_SUBDIR
+        return "/".join(
+            p for p in (CONTAINER_TESTS_PYLIB, subdir, os.path.basename(subpath)) if p
+        )
+
+    def deploy_test_files(self, subpaths: list[str]) -> DeployResult:
+        """Upload NIOS test files (worktree subpaths, e.g.
+        products/one/server/src/wapi/test/test_token_bundle.py) to their
+        /infoblox/tests/lib/python/infoblox/test/... path, md5-verified, stale
+        .pyc and .pys removed. A file missing from the worktree raises."""
+        files = []
+        for sub in subpaths:
+            local = self._resolve_worktree(sub)
+            if not os.path.isfile(local):
+                raise DeployError(f"test file not found: {local}", artifact=sub)
+            dest = self._test_dest(sub)
+            files.append({"file": dest, "hash": self.upload_file(local, dest)})
+        return DeployResult(
+            artifact="test_files", changed=True, details={"files": files},
         )
 
     # -- deploy: nios_model cloud-init module (NIOSRFE-10221) --------------

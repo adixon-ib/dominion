@@ -7,19 +7,22 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from . import py_tests
 from .config import LocalContainerConfig
 from .constants import (
-    NIOS_CONSOLE_USER,
+    ADMIN_HTTPD_WAIT_TIMEOUT,
     NIOS_CONSOLE_PASSWORD,
+    NIOS_CONSOLE_USER,
     NIOS_REBOOT_TIMEOUT,
     NIOS_WAPI_POLL_INTERVAL,
     NIOS_WAPI_READY_TIMEOUT,
+    PY_TESTS_TIMEOUT,
     WAPI_VERSION,
 )
 from .deploy import DeployError, DeployMixin
 from .log import LogDump, LogMark, create_logger
 from .network import LocalNetworkMixin
-from .session import ShellSession, ConsoleSession
+from .session import ConsoleSession, ShellSession
 from .transport import CommandError, LocalDockerTransport, TransportError
 
 if TYPE_CHECKING:
@@ -100,22 +103,34 @@ class NiosContainer(DeployMixin):
         finally:
             session._close()
 
-    def sh(self, cmd: str, check: bool = True) -> tuple[int, str, str]:
-        """Run a shell command line in the container: (exit code, stdout, stderr)."""
+    def sh(
+        self, cmd: str, check: bool = True, timeout: int | None = None,
+        report_lines: int | None = None,
+    ) -> tuple[int, str, str]:
+        """Run a shell command line in the container: (exit code, stdout, stderr).
+
+        timeout (seconds) overrides the transport's default for this call.
+        report_lines caps the stdout kept in the on_call record to its last
+        lines, the returned stdout is complete."""
+        opts = {} if timeout is None else {"timeout": timeout}
         try:
-            rc, out, err = self._transport.run(f"sh -c {shlex.quote(cmd)}", check=check)
+            rc, out, err = self._transport.run(
+                f"sh -c {shlex.quote(cmd)}", check=check, **opts,
+            )
         except CommandError as e:
-            self._emit_sh(cmd, e.exit_code, e.stdout, e.stderr)
+            self._emit_sh(cmd, e.exit_code, e.stdout, e.stderr, report_lines)
             raise
         except TransportError as e:
             self._emit_sh(cmd, -1, "", str(e))
             raise
-        self._emit_sh(cmd, rc, out, err)
+        self._emit_sh(cmd, rc, out, err, report_lines)
         return rc, out, err
 
-    def _emit_sh(self, cmd, rc, out, err) -> None:
+    def _emit_sh(self, cmd, rc, out, err, report_lines=None) -> None:
         if not self.on_call:
             return
+        if report_lines is not None:
+            out = self._cap_for_report(out, None, report_lines)
         try:
             self.on_call({
                 "kind": "sh", "cmd": cmd, "rc": rc, "stdout": out, "stderr": err,
@@ -224,13 +239,17 @@ class NiosContainer(DeployMixin):
     REPORT_LOG_LINES = 200  # lines of a dumped log kept in the on_call record
 
     @classmethod
-    def _cap_for_report(cls, text: str, dest: Path) -> str:
+    def _cap_for_report(
+        cls, text: str, dest: Path | None = None, keep: int | None = None,
+    ) -> str:
+        keep = cls.REPORT_LOG_LINES if keep is None else keep
         lines = text.splitlines(keepends=True)
-        if len(lines) <= cls.REPORT_LOG_LINES:
+        if len(lines) <= keep:
             return text
-        more = len(lines) - cls.REPORT_LOG_LINES
-        note = f"... {more} more lines, full log in {dest}\n"
-        return note + "".join(lines[-cls.REPORT_LOG_LINES:])
+        note = f"... {len(lines) - keep} more lines"
+        if dest is not None:
+            note += f", full log in {dest}"
+        return note + "\n" + "".join(lines[-keep:])
 
     def mark_log(self, log_path: str) -> LogMark:
         _, stdout, _ = self._transport.run(f"wc -l {shlex.quote(log_path)}")
@@ -305,6 +324,67 @@ class NiosContainer(DeployMixin):
         since: LogMark | None = None,
     ) -> int:
         return self.count_log(self.INFOBLOX_LOG, pattern, since=since)
+
+    ADMIN_HTTPD_WAIT_CMD = (
+        "for i in $(seq 120); do pgrep -f [a]dmin-httpd.conf >/dev/null && exit 0; "
+        "sleep 5; done; exit 1"
+    )
+
+    def wait_ready(self, timeout: int = NIOS_WAPI_READY_TIMEOUT) -> None:
+        """Wait for admin-httpd, then for WAPI to answer. WAPI can hang instead of
+        refusing right after a restart or factory reset, so a curl timeout or a
+        not-ready answer is retried until timeout."""
+        rc, _, _ = self.sh(
+            self.ADMIN_HTTPD_WAIT_CMD, check=False, timeout=ADMIN_HTTPD_WAIT_TIMEOUT,
+        )
+        if rc != 0:
+            raise RuntimeError(f"admin-httpd not running in {self.container_name}")
+        deadline = time.time() + timeout
+        while True:
+            try:
+                return self._wait_for_wapi(timeout=60)
+            except (TransportError, RuntimeError):
+                if time.time() >= deadline:
+                    raise RuntimeError(
+                        f"WAPI not answering after {timeout}s"
+                    ) from None
+
+    def run_py_tests(
+        self,
+        tests: str | list[str],
+        *,
+        keywords: str = "all",
+        timeout: int = PY_TESTS_TIMEOUT,
+        wait: bool = True,
+    ) -> py_tests.PyTestResult:
+        """Run NIOS unit tests with run_py_tests (always --no-check-licenses, the
+        license check segfaults with the OneDB C extensions) and parse the result.
+
+        tests is a module or class name (infoblox.test.one.wapi.test_x.Class) or a
+        list, one -N each. keywords is the -k value (all, base, wapi, ...). wait
+        waits for admin-httpd and WAPI first (wait_ready). Each run resets the
+        box to factory defaults afterwards, so it takes minutes.
+
+        Never run two at once on one container: they reset the box under each
+        other. This raises RuntimeError if a run_py_tests process is already
+        running in the container (a pgrep check, so it also catches another
+        script, not only another thread). The check and the start are not atomic.
+
+        The on_call record keeps the last 200 lines of the output. The result's
+        raw has all of it. A non-zero rc does not raise: look at result.ok.
+        """
+        cmd = py_tests.command(tests, keywords)
+        rc, _, _ = self.sh("pgrep -f '[r]un_py_tests'", check=False)
+        if rc == 0:
+            raise RuntimeError(
+                f"run_py_tests is already running in {self.container_name}"
+            )
+        if wait:
+            self.wait_ready()
+        rc, out, _ = self.sh(
+            cmd, check=False, timeout=timeout, report_lines=self.REPORT_LOG_LINES,
+        )
+        return py_tests.parse(out, rc)
 
     def __repr__(self) -> str:
         return f"NiosContainer({self.container_name!r})"
