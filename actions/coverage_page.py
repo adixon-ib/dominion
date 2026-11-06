@@ -12,8 +12,6 @@ page for the file: coverage 6.x numbers its source lines with id="t<lineno>"
 
 from __future__ import annotations
 
-import os
-
 from dominion.src.report_html import CSS, _e
 
 CONTEXT = 3
@@ -94,11 +92,12 @@ def _file(path, fc, changed, source, page) -> str:
 
 
 def render(  # noqa: PLR0913
-    files, changed, not_measured, *, base: str, worktree: str, pages,
+    files, changed, not_measured, *, base: str, source, pages,
 ) -> str:
     """files: path -> FileCoverage, changed: path -> changed lines, not_measured:
-    changed .py files without data, pages: path -> href of coverage's page for the
-    file (relative to this page), or missing."""
+    changed .py files without data, source: path -> its lines (or None), pages:
+    path -> href of coverage's page for the file (relative to this page), or
+    missing."""
     run = sum(fc.run for fc in files.values())
     total = sum(fc.total for fc in files.values())
     pct = f" ({round(100 * run / total)}%)" if total else ""
@@ -106,7 +105,7 @@ def render(  # noqa: PLR0913
     head = (
         f"<header><h1>Coverage of the changed lines</h1>"
         f'<div class="counts">changed lines run {run}/{total}{_e(pct)}</div>'
-        f'<dl class="meta"><dt>Range</dt><dd>{_e(base)}..HEAD</dd></dl>'
+        f'<dl class="meta"><dt>Range</dt><dd>{_e(base)}...HEAD</dd></dl>'
     )
     out_of_scope = not_measured + other
     if out_of_scope:
@@ -115,14 +114,12 @@ def render(  # noqa: PLR0913
                  f'<ul class="out">{items}</ul>')
     body = [head + "</header>"]
     for path, fc in files.items():
-        try:
-            with open(os.path.join(worktree, path), encoding="utf-8") as f:
-                source = f.read().splitlines()
-        except OSError:
+        lines = source(path)
+        if lines is None:
             body.append(f'<section class="card"><h2>{_e(path)}</h2>'
                         '<div class="muted">source not readable</div></section>')
             continue
-        body.append(_file(path, fc, changed.get(path, []), source, pages.get(path)))
+        body.append(_file(path, fc, changed.get(path, []), lines, pages.get(path)))
     return (
         '<!doctype html><html lang="en"><head><meta charset="utf-8">'
         '<meta name="viewport" content="width=device-width,initial-scale=1">'

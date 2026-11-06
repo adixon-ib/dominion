@@ -10,12 +10,13 @@ container measures itself with coverage (the image's coverage 6.2 in
 admin-httpd runs Python through mod_python and its workers never run atexit, so
 the hook also starts a daemon thread that saves the data every 2 seconds.
 coverage_off combines and exports the data, removes the hook, and on the host
-reports which of the lines changed between base and HEAD ran.
+reports which of the lines changed between base and HEAD ran (`git diff
+base...HEAD`: the changes of the branch since it left base).
 
 Every Python process on the box loads the hook during the session: include
 limits what gets measured. On an appliance, ticket tests in a coverage session
 must run with skip_home: reset_all restores the image Python and removes the
-hook. A session needs a clean worktree at HEAD, the line numbers come from it.
+hook. The source shown is HEAD's (git show), so its line numbers match the diff.
 """
 
 from __future__ import annotations
@@ -23,6 +24,7 @@ from __future__ import annotations
 import base64
 import io
 import json
+import logging
 import os
 import re
 import shlex
@@ -34,6 +36,8 @@ from dataclasses import dataclass, field
 from dominion.actions.coverage_page import HTML_DIR, render
 from dominion.src.deploy import CONTAINER_IBAP, CONTAINER_PYABS, CONTAINER_WAPI
 
+log = logging.getLogger("dominion.coverage")
+
 COV_DIR = "/tmp/cov"
 RC_FILE = f"{COV_DIR}/.coveragerc"
 DATA_FILE = f"{COV_DIR}/.coverage"
@@ -43,6 +47,7 @@ PTH_FILE = "/usr/lib/python3/dist-packages/zz_dominion_cov.pth"
 JSON_FILE = f"{COV_DIR}/coverage.json"
 HTML_SRC = f"{COV_DIR}/html"
 FLUSH_WAIT = 3  # seconds: the saver thread saves every 2
+RESTART_PAUSE = 2  # seconds between stop and start, as deploy_token_py waits
 STEP_TIMEOUT = 300
 
 SRC = "products/one/server/src"
@@ -70,7 +75,7 @@ if cov:
             cov.save()
 
     threading.Thread(target=_save, daemon=True).start()"""
-PTH = f'import sys; sys.path.insert(0, "{COV_DIR}"); import {HOOK_MODULE}'
+PTH = f'import sys; sys.path.append("{COV_DIR}"); import {HOOK_MODULE}'
 
 
 def rcfile(include: list[str]) -> str:
@@ -119,36 +124,50 @@ def coverage_on(target, include: list[str]) -> None:
     _write(c, HOOK_FILE, HOOK)
     _write(c, PTH_FILE, PTH)
     c.stop_admin_httpd()
+    time.sleep(RESTART_PAUSE)
     c.start_admin_httpd()
     c.wait_ready()
 
 
 def coverage_off(target, out_dir: str, *, worktree: str, base: str) -> CoverageResult:
     """End the session: flush, stop admin-httpd, combine the data, copy
-    coverage.json and coverage's own html report (coverage_html/) to out_dir, move
-    the .pth to /tmp/cov (mv, not rm), start admin-httpd. Then, on the host,
-    intersect the lines changed between base and HEAD of worktree with the
-    measured ones and write coverage.txt, coverage.html (the changed hunks,
-    green where they ran, red where not) and changed_lines.json next to
-    coverage.json. The hook is removed and admin-httpd restarted even if combine
-    fails."""
+    coverage.json to out_dir, move the .pth to /tmp/cov (mv, not rm), start
+    admin-httpd. Then, on the host, intersect the lines changed between base and
+    HEAD of worktree (`git diff base...HEAD`) with the measured ones and write
+    coverage.json, coverage.txt, changed_lines.json and coverage.html (the changed
+    hunks, green where they ran, red where not). Last, best effort, coverage's own
+    html report is copied to coverage_html/ and coverage.html gets links to its
+    pages: if that copy fails the rest stays and there are no links. The hook is
+    removed and admin-httpd started even if a step fails."""
     c = _container(target)
     time.sleep(FLUSH_WAIT)
-    c.stop_admin_httpd()
+    packed = None
     try:
+        c.stop_admin_httpd()
         env = f"COVERAGE_RCFILE={RC_FILE}"
         c.sh(f"{env} python3 -m coverage combine --keep", timeout=STEP_TIMEOUT)
         c.sh(f"{env} python3 -m coverage json -o {JSON_FILE}", timeout=STEP_TIMEOUT)
-        c.sh(f"{env} python3 -m coverage html -d {HTML_SRC}", timeout=STEP_TIMEOUT)
         _, raw, _ = c.sh(f"cat {JSON_FILE}", timeout=STEP_TIMEOUT, report_lines=20)
-        _, packed, _ = c.sh(
-            f"tar -C {HTML_SRC} -czf - . | base64",
-            timeout=STEP_TIMEOUT, report_lines=20,
-        )
+        try:
+            c.sh(f"{env} python3 -m coverage html -d {HTML_SRC}", timeout=STEP_TIMEOUT)
+            pack = f"set -o pipefail; tar -C {HTML_SRC} -czf - . | base64"
+            _, packed, _ = c.sh(
+                f"bash -c {shlex.quote(pack)}", timeout=STEP_TIMEOUT, report_lines=20,
+            )
+        except Exception as e:
+            log.warning("coverage html not copied: %s: %s", type(e).__name__, e)
     finally:
-        c.sh(f"mv {PTH_FILE} {COV_DIR}/", check=False)
-        c.start_admin_httpd()
+        try:
+            c.sh(f"mv {PTH_FILE} {COV_DIR}/", check=False)
+        finally:
+            c.start_admin_httpd()
         c.wait_ready()
+    return _outputs(out_dir, raw, packed, worktree, base)
+
+
+def _outputs(
+    out_dir: str, raw: str, packed: str | None, worktree: str, base: str,
+) -> CoverageResult:
     os.makedirs(out_dir, exist_ok=True)
     coverage_json = os.path.join(out_dir, "coverage.json")
     with open(coverage_json, "w", encoding="utf-8") as f:
@@ -159,16 +178,27 @@ def coverage_off(target, out_dir: str, *, worktree: str, base: str) -> CoverageR
     with open(changed_json, "w", encoding="utf-8") as f:
         json.dump(changed, f, indent=2, sort_keys=True)
     files, not_measured = intersect(changed, measured)
-    html_dir = os.path.join(out_dir, HTML_DIR)
-    unpack(packed, html_dir)
-    pages = html_pages(html_dir, files)
+    sources = {path: git_source(worktree, path) for path in files}
     txt = os.path.join(out_dir, "coverage.txt")
     with open(txt, "w", encoding="utf-8") as f:
-        f.write(report(files, not_measured, worktree, list(measured)))
+        f.write(report(files, not_measured, sources.get, list(measured)))
     page = os.path.join(out_dir, "coverage.html")
-    with open(page, "w", encoding="utf-8") as f:
-        f.write(render(files, changed, not_measured, base=base, worktree=worktree,
-                       pages=pages))
+
+    def write_page(pages):
+        with open(page, "w", encoding="utf-8") as f:
+            f.write(render(files, changed, not_measured, base=base,
+                           source=sources.get, pages=pages))
+
+    write_page({})
+    html_dir = os.path.join(out_dir, HTML_DIR)
+    if packed:
+        try:
+            unpack(packed, html_dir)
+            pages = html_pages(html_dir, files)
+            if pages:
+                write_page(pages)
+        except Exception as e:
+            log.warning("coverage html not copied: %s: %s", type(e).__name__, e)
     return CoverageResult(
         files, not_measured, coverage_json, txt, changed_json, page, html_dir,
     )
@@ -211,29 +241,60 @@ def html_pages(html_dir: str, files: dict) -> dict[str, str]:
 
 def git_diff(worktree: str, base: str) -> str:
     out = subprocess.run(
-        ["git", "-C", worktree, "diff", "-U0", f"{base}..HEAD"],
+        ["git", "-c", "core.quotepath=off", "-C", worktree, "diff", "-U0",
+         f"{base}...HEAD"],
         capture_output=True, text=True, check=True,
     )
     return out.stdout
 
 
-FILE_RE = re.compile(r"^\+\+\+ b/(.+)$")
-HUNK_RE = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@")
+def git_source(worktree: str, path: str) -> list[str] | None:
+    """The lines of path at HEAD (the version the diff's line numbers are about),
+    or None. Split on \\n only: splitlines would also split on form feeds."""
+    out = subprocess.run(
+        ["git", "-C", worktree, "show", f"HEAD:{path}"],
+        capture_output=True, text=True, check=False,
+    )
+    if out.returncode != 0:
+        return None
+    lines = out.stdout.split("\n")
+    return lines[:-1] if lines[-1] == "" else lines
+
+
+FILE_RE = re.compile(r'^\+\+\+ (?:b/(.+?)|"b/(.+)")\t?$')
+HUNK_RE = re.compile(r"^@@ -\d+(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
+QUOTED_ESCAPE_RE = re.compile(r"\\([\\\"tn])")
+UNESCAPE = {"\\": "\\", '"': '"', "t": "\t", "n": "\n"}
 
 
 def changed_lines(diff: str) -> dict[str, list[int]]:
     """Added and changed line numbers per file from `git diff -U0`. A hunk that
-    only deletes (+N,0) adds none, a deleted file has no `+++ b/` line."""
+    only deletes (+N,0) adds none, a deleted file has no `+++ b/` line. A `+++ `
+    line is a file header only right after a `---` line and outside a hunk's
+    counted lines, so an added line like `++ x` after a removed `-- x` is not one.
+    Quoted `"b/..."` paths are unquoted."""
     out: dict[str, list[int]] = {}
     path = None
+    prev = ""
+    old_left = new_left = 0
     for line in diff.splitlines():
-        if line.startswith("+++ "):
+        if old_left or new_left:
+            old_left -= line.startswith(("-", " "))
+            new_left -= line.startswith(("+", " "))
+        elif line.startswith("+++ ") and prev.startswith("--- "):
             m = FILE_RE.match(line)
-            path = m.group(1) if m else None
+            if m is None:
+                path = None
+            elif m.group(1) is not None:
+                path = m.group(1)
+            else:
+                path = QUOTED_ESCAPE_RE.sub(lambda e: UNESCAPE[e.group(1)], m.group(2))
         elif path and (m := HUNK_RE.match(line)):
-            start, count = int(m.group(1)), int(m.group(2) or 1)
+            start, count = int(m.group(2)), int(m.group(3) or 1)
+            old_left, new_left = int(m.group(1) or 1), count
             if count:
                 out.setdefault(path, []).extend(range(start, start + count))
+        prev = line
     return out
 
 
@@ -244,8 +305,9 @@ def container_path(path: str) -> str | None:
 
 
 def lookup(table: dict, path: str):
-    """table[path], or the entry of a key that ends with path (coverage may record
-    a longer path), or of a key path ends with (a shorter, relative one)."""
+    """table[path], or the entry of a key that ends with path, or of a key path ends
+    with. Coverage 6.2 keys are relative_filename(): relative to the cwd of the
+    process that ran, so they can be longer or shorter than the container path."""
     if path in table:
         return table[path]
     for key, value in table.items():
@@ -276,7 +338,7 @@ def intersect(
 
 
 def report(
-    files: dict[str, FileCoverage], not_measured: list[str], worktree: str,
+    files: dict[str, FileCoverage], not_measured: list[str], source,
     measured_keys: list[str] = (),
 ) -> str:
     out = []
@@ -290,13 +352,9 @@ def report(
         )
     for path, fc in files.items():
         out.append(f"{path}: changed lines run {fc.run}/{fc.total}")
-        try:
-            with open(os.path.join(worktree, path), encoding="utf-8") as f:
-                source = f.read().splitlines()
-        except OSError:
-            source = []
+        lines = source(path) or []
         out += [
-            f"  {n}: {source[n - 1] if n <= len(source) else ''}" for n in fc.missing
+            f"  {n}: {lines[n - 1] if n <= len(lines) else ''}" for n in fc.missing
         ]
     out += [f"{path}: not measured" for path in not_measured]
     return "\n".join(out) + "\n"

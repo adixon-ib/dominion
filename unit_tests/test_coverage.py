@@ -4,6 +4,7 @@ object, the git diff is a string, and any real process raises."""
 import base64
 import io
 import json
+import logging
 import os
 import subprocess
 import tarfile
@@ -14,6 +15,7 @@ import pytest
 import dominion.actions.coverage as cov
 import dominion.actions.coverage_page as page_mod
 import dominion.src.transport as transport_mod
+from dominion import TransportError
 from dominion.actions import CoverageResult, coverage_off, coverage_on
 
 
@@ -70,7 +72,7 @@ class FakeContainer:
             raise RuntimeError(f"{self.fail} failed")
         if cmd.startswith("cat /tmp/cov/cov"):
             return 0, self.coverage_json, ""
-        if cmd.startswith("tar -C /tmp/cov/html"):
+        if "tar -C /tmp/cov/html" in cmd:
             return 0, self.html, ""
         return 0, "", ""
 
@@ -101,7 +103,7 @@ def test_coverage_on_writes_rc_hook_and_pth_with_their_paths_and_contents():
     assert rc in c.cmds
     pth = (
         "cat > /usr/lib/python3/dist-packages/zz_dominion_cov.pth <<'DOMINION_EOF'\n"
-        'import sys; sys.path.insert(0, "/tmp/cov"); import dominion_cov_hook\n'
+        'import sys; sys.path.append("/tmp/cov"); import dominion_cov_hook\n'
         "DOMINION_EOF"
     )
     assert pth in c.cmds
@@ -254,14 +256,10 @@ def test_intersect_counts_only_executable_changed_lines():
     assert nm == []
 
 
-def test_report_text_with_the_measured_numbers(tmp_path):
+def test_report_text_with_the_measured_numbers():
     measured = json.loads(coverage_json())["files"]
     files, nm = cov.intersect(changed_for_report(), measured)
-    for path in (PYABS, WAPI):
-        full = tmp_path / path
-        full.parent.mkdir(parents=True, exist_ok=True)
-        full.write_text("".join(f"line {i}\n" for i in range(1, 101)))
-    text = cov.report(files, nm, str(tmp_path))
+    text = cov.report(files, nm, lambda p: [f"line {i}" for i in range(1, 101)])
     lines = text.splitlines()
     assert lines[0] == f"{PYABS}: changed lines run 34/100"
     assert lines[1] == "  35: line 35"
@@ -275,7 +273,7 @@ def test_report_text_with_the_measured_numbers(tmp_path):
 
 def test_report_missing_source_file_keeps_the_line_numbers():
     fc = cov.FileCoverage(run=0, total=1, missing=[7])
-    assert cov.report({"a.py": fc}, [], "/nonexistent") == (
+    assert cov.report({"a.py": fc}, [], lambda p: None) == (
         "a.py: changed lines run 0/1\n  7: \n"
     )
 
@@ -284,8 +282,16 @@ def test_report_missing_source_file_keeps_the_line_numbers():
 
 @pytest.fixture
 def run_off(tmp_path, monkeypatch):
+    def git_source(worktree, path):
+        full = os.path.join(worktree, path)
+        if not os.path.exists(full):
+            return None
+        with open(full) as f:
+            return f.read().split("\n")[:-1]
+
     def run(container, diff=DIFF):
         monkeypatch.setattr(cov, "git_diff", lambda worktree, base: diff)
+        monkeypatch.setattr(cov, "git_source", git_source)
         return coverage_off(
             container, str(tmp_path / "out"), worktree=str(tmp_path / "wt"),
             base="BASE",
@@ -297,30 +303,25 @@ def test_coverage_off_order_and_commands(run_off):
     c = FakeContainer(coverage_json())
     run_off(c)
     kinds = [e if e[0] != "sh" else ("sh", e[1].split()[0]) for e in c.events]
+    rc = "COVERAGE_RCFILE=/tmp/cov/.coveragerc"
     assert kinds == [
         ("stop",),
-        ("sh", "COVERAGE_RCFILE=/tmp/cov/.coveragerc"),
-        ("sh", "COVERAGE_RCFILE=/tmp/cov/.coveragerc"),
-        ("sh", "COVERAGE_RCFILE=/tmp/cov/.coveragerc"),
+        ("sh", rc),
+        ("sh", rc),
         ("sh", "cat"),
-        ("sh", "tar"),
+        ("sh", rc),
+        ("sh", "bash"),
         ("sh", "mv"),
         ("start",),
         ("ready",),
     ]
-    assert c.cmds[0] == (
-        "COVERAGE_RCFILE=/tmp/cov/.coveragerc python3 -m coverage combine --keep"
+    assert c.cmds[0] == f"{rc} python3 -m coverage combine --keep"
+    assert c.cmds[1] == f"{rc} python3 -m coverage json -o /tmp/cov/coverage.json"
+    assert c.cmds[2] == "cat /tmp/cov/coverage.json"
+    assert c.cmds[3] == f"{rc} python3 -m coverage html -d /tmp/cov/html"
+    assert c.cmds[4] == (
+        "bash -c 'set -o pipefail; tar -C /tmp/cov/html -czf - . | base64'"
     )
-    assert c.cmds[1] == (
-        "COVERAGE_RCFILE=/tmp/cov/.coveragerc python3 -m coverage json "
-        "-o /tmp/cov/coverage.json"
-    )
-    assert c.cmds[2] == (
-        "COVERAGE_RCFILE=/tmp/cov/.coveragerc python3 -m coverage html "
-        "-d /tmp/cov/html"
-    )
-    assert c.cmds[3] == "cat /tmp/cov/coverage.json"
-    assert c.cmds[4] == "tar -C /tmp/cov/html -czf - . | base64"
 
 
 def test_disable_is_mv_never_rm(run_off):
@@ -353,7 +354,9 @@ def test_coverage_off_writes_files_and_returns_the_result(run_off, tmp_path):
     src.parent.mkdir(parents=True)
     src.write_text("".join(f"pyabs line {i}\n" for i in range(1, 101)))
     diff = (
-        f"+++ b/{PYABS}\n@@ -0,0 +1,100 @@\n" + f"+++ b/{OPLOG}\n@@ -0,0 +1,2 @@\n"
+        f"--- a/{PYABS}\n+++ b/{PYABS}\n@@ -0,0 +1,100 @@\n"
+        + "".join("+x\n" for _ in range(100))
+        + f"--- /dev/null\n+++ b/{OPLOG}\n@@ -0,0 +1,2 @@\n+a\n+b\n"
     )
     c = FakeContainer(coverage_json())
     r = run_off(c, diff)
@@ -403,13 +406,9 @@ def test_hunks_merge_overlapping_and_adjacent_contexts_but_not_separate_ones():
 # -- coverage.html ---------------------------------------------------------------
 
 def page(tmp_path, files, changed, source, not_measured=(), pages=None):  # noqa: PLR0913, PLR0917
-    for path, lines in source.items():
-        full = tmp_path / path
-        full.parent.mkdir(parents=True, exist_ok=True)
-        full.write_text("\n".join(lines) + "\n")
     return page_mod.render(
         files, changed, list(not_measured), base="origin/main",
-        worktree=str(tmp_path), pages=pages or {},
+        source=source.get, pages=pages or {},
     )
 
 
@@ -513,7 +512,7 @@ def test_totals_range_and_out_of_scope_list(tmp_path):
     src = {PYABS: numbered(60), WAPI: numbered(60)}
     out = page(tmp_path, files, changed, src, not_measured=[OPLOG])
     assert "changed lines run 122/200 (61%)" in out
-    assert "origin/main..HEAD" in out
+    assert "origin/main...HEAD" in out
     assert "changed lines run 34/100 (34%)" in out
     assert "changed lines run 88/100 (88%)" in out
     scope = out[out.index("out of scope"):out.index("</ul>")]
@@ -547,7 +546,7 @@ def test_coverage_off_runs_html_copies_it_out_and_links_the_real_page_names(
     src = wt / PYABS
     src.parent.mkdir(parents=True)
     src.write_text("\n".join(numbered(120)) + "\n")
-    diff = f"+++ b/{PYABS}\n@@ -0,0 +50,2 @@\n"
+    diff = f"--- a/{PYABS}\n+++ b/{PYABS}\n@@ -0,0 +50,2 @@\n+a\n+b\n"
     c = FakeContainer(coverage_json())
     r = run_off(c, diff)
     out = tmp_path / "out"
@@ -612,16 +611,163 @@ def test_intersect_accepts_longer_keys():
 
 def test_coverage_txt_notes_when_no_measured_file_matched():
     keys = ["/a/x.py", "/a/y.py", "/a/z.py", "/a/w.py"]
-    text = cov.report({}, [PYABS, WAPI], "/wt", keys)
+    text = cov.report({}, [PYABS, WAPI], lambda p: None, keys)
     assert text.splitlines()[0] == (
         "NOTE: no measured file matched the 2 changed .py file(s). coverage.json "
         "has 4 file(s), e.g.: /a/x.py, /a/y.py, /a/z.py"
     )
     assert f"{PYABS}: not measured" in text
     assert "NOTE" not in cov.report(
-        {PYABS: cov.FileCoverage(1, 1)}, [WAPI], "/nonexistent", ["/a/x.py"],
+        {PYABS: cov.FileCoverage(1, 1)}, [WAPI], lambda p: None, ["/a/x.py"],
     )
 
 
 def test_coverage_txt_says_so_when_nothing_python_changed():
-    assert cov.report({}, [], "/wt") == "no changed .py files\n"
+    assert cov.report({}, [], lambda p: None) == "no changed .py files\n"
+
+
+# -- review fixes ----------------------------------------------------------------
+
+def test_coverage_on_pauses_between_stop_and_start(monkeypatch):
+    seen = []
+    monkeypatch.setattr(cov.time, "sleep", seen.append)
+    coverage_on(FakeContainer(), ["*/x.py"])
+    assert seen == [2]
+
+
+def test_httpd_is_started_and_the_error_propagates_when_mv_fails(run_off):
+    c = FakeContainer(coverage_json(), fail="mv /usr")
+    with pytest.raises(RuntimeError, match="mv /usr failed"):
+        run_off(c)
+    assert c.events[-1] == ("start",)  # started even though the mv raised
+
+
+def test_mv_transport_error_still_starts_admin_httpd(run_off):
+    class Failing(FakeContainer):
+        def sh(self, cmd, **kw):
+            if cmd.startswith("mv "):
+                self.events.append(("sh", cmd))
+                raise TransportError("ssh timed out")
+            return super().sh(cmd, **kw)
+
+    c = Failing(coverage_json())
+    with pytest.raises(TransportError):
+        run_off(c)
+    assert ("start",) in c.events
+    mv = ("sh", f"mv {cov.PTH_FILE} /tmp/cov/")
+    assert c.events.index(("start",)) > c.events.index(mv)
+
+
+def test_stop_failure_still_removes_the_hook_and_starts_httpd(run_off):
+    class Failing(FakeContainer):
+        def stop_admin_httpd(self):
+            raise TransportError("docker exec failed")
+
+    c = Failing(coverage_json())
+    with pytest.raises(TransportError):
+        run_off(c)
+    assert f"mv {cov.PTH_FILE} /tmp/cov/" in c.cmds
+    assert c.events[-2:] == [("start",), ("ready",)]
+
+
+def test_html_copy_failure_is_a_warning_and_keeps_everything_else(
+    run_off, tmp_path, caplog,
+):
+    c = FakeContainer(coverage_json(), fail="coverage html")
+    with caplog.at_level(logging.WARNING, logger="dominion.coverage"):
+        r = run_off(c)
+    out = tmp_path / "out"
+    assert "coverage html not copied" in caplog.text
+    names = ("coverage.json", "coverage.txt", "coverage.html", "changed_lines.json")
+    for name in names:
+        assert (out / name).exists()
+    assert not (out / "coverage_html").exists()
+    assert "coverage_html/" not in (out / "coverage.html").read_text()
+    assert r.coverage_html == str(out / "coverage.html")
+    assert ("start",) in c.events  # the restart is not skipped either
+
+
+def test_bad_html_archive_is_a_warning_and_leaves_no_links(
+    run_off, tmp_path, caplog,
+):
+    wt = tmp_path / "wt" / PYABS
+    wt.parent.mkdir(parents=True)
+    wt.write_text("x\n" * 60)
+    diff = f"--- a/{PYABS}\n+++ b/{PYABS}\n@@ -0,0 +50,1 @@\n+x\n"
+    c = FakeContainer(coverage_json(), html="not base64 or tar")
+    with caplog.at_level(logging.WARNING, logger="dominion.coverage"):
+        run_off(c, diff)
+    assert "coverage html not copied" in caplog.text
+    assert "coverage_html/" not in (tmp_path / "out" / "coverage.html").read_text()
+    assert (tmp_path / "out" / "coverage.txt").read_text().startswith(PYABS)
+
+
+# -- diff parsing, quoting, git commands -----------------------------------------
+
+def test_plus_plus_plus_is_a_header_only_after_a_minus_minus_minus_line():
+    diff = (
+        f"--- a/{PYABS}\n+++ b/{PYABS}\n"
+        "@@ -5 +5 @@\n-- old comment\n++ new comment\n"  # shows as --- and +++
+        "@@ -9,0 +10 @@\n+added\n"
+        "+++ b/not/a/header.py\n"  # no --- before it, outside any hunk's counts
+        "@@ -20,0 +21 @@\n+more\n"
+    )
+    got = cov.changed_lines(diff)
+    assert got == {PYABS: [5, 10, 21]}
+
+
+def test_a_removed_dash_dash_line_followed_by_an_added_plus_plus_line():
+    diff = (
+        f"--- a/{PYABS}\n+++ b/{PYABS}\n"
+        "@@ -3 +3 @@\n"
+        "--- removed line that starts with two dashes\n"
+        "+++ added line that starts with two pluses\n"
+    )
+    assert cov.changed_lines(diff) == {PYABS: [3]}
+
+
+def test_quoted_and_tab_terminated_paths_in_the_diff():
+    diff = (
+        '--- "a/dir/we\\"ird\\tname.py"\n+++ "b/dir/we\\"ird\\tname.py"\n'
+        "@@ -0,0 +1,2 @@\n+a\n+b\n"
+        "--- a/with space.py\t\n+++ b/with space.py\t\n@@ -1 +1 @@\n-x\n+y\n"
+    )
+    assert cov.changed_lines(diff) == {
+        'dir/we"ird\tname.py': [1, 2], "with space.py": [1],
+    }
+
+
+def test_git_diff_uses_the_merge_base_range_and_unquoted_paths(monkeypatch):
+    seen = {}
+
+    def run(argv, **kw):
+        seen["argv"] = argv
+        return types.SimpleNamespace(stdout="DIFF", returncode=0)
+
+    monkeypatch.setattr(cov, "subprocess", types.SimpleNamespace(run=run))
+    assert cov.git_diff("/wt", "origin/main") == "DIFF"
+    assert seen["argv"] == [
+        "git", "-c", "core.quotepath=off", "-C", "/wt", "diff", "-U0",
+        "origin/main...HEAD",
+    ]
+
+
+def test_git_source_reads_head_and_splits_on_newline_only(monkeypatch):
+    outs = iter([
+        types.SimpleNamespace(stdout="a\nb\n", returncode=0),
+        types.SimpleNamespace(stdout="a\x0cb\n\n", returncode=0),
+        types.SimpleNamespace(stdout="no final newline", returncode=0),
+        types.SimpleNamespace(stdout="", returncode=128),
+    ])
+    argvs = []
+
+    def run(argv, **kw):
+        argvs.append(argv)
+        return next(outs)
+
+    monkeypatch.setattr(cov, "subprocess", types.SimpleNamespace(run=run))
+    assert cov.git_source("/wt", "p.py") == ["a", "b"]
+    assert cov.git_source("/wt", "p.py") == ["a\x0cb", ""]  # form feed kept in a line
+    assert cov.git_source("/wt", "p.py") == ["no final newline"]
+    assert cov.git_source("/wt", "p.py") is None
+    assert argvs[0] == ["git", "-C", "/wt", "show", "HEAD:p.py"]
