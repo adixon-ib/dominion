@@ -244,7 +244,7 @@ def _new_section(name: str, pre: list | None = None) -> dict:
     return {
         "name": name, "status": "SKIP", "duration": 0.0, "reason": "", "error": None,
         "pre": pre if pre is not None else [], "calls": [], "checks": [],
-        "state": None,
+        "state": None, "logs": [],
     }
 
 
@@ -346,6 +346,10 @@ class Ticket:
                 dest=dest, since=mark, grep=pattern, fixed=True,
             )
             nl.lines = dump.lines
+            if self._current is not None:
+                self._current["logs"].append(
+                    {"pattern": pattern, "lines": list(nl.lines)}
+                )
 
     def _skip(
         self, section: dict, reason: str, blocked: bool, unmet: bool = False,
@@ -559,6 +563,7 @@ class Ticket:
             self._run_cleanups()
             self._run_homes()
             self._write_report()
+            self._write_html()
             self.run.summary(extra=self._extra(), _allow_no_target=True)
         finally:
             _rebind_log_handlers(sys.stderr, old_err)
@@ -610,9 +615,23 @@ class Ticket:
             *[f"UNMET (exit 1): {u}" for u in self._unmet],
         ]
 
+    def _verdict(self) -> str:
+        return "FAIL" if self.run._failed or self._unmet else "PASS"
+
+    def _write_html(self) -> None:
+        """report.html, from the same data as report.md. A render failure is a
+        warning: it never masks the run."""
+        try:
+            from .report_html import render
+            page = render(self)
+            with open(os.path.join(self.output_dir, "report.html"), "w") as f:
+                f.write(page)
+        except Exception as e:
+            self.warn(f"report.html not written: {type(e).__name__}: {e}")
+
     def _write_report(self) -> None:
         run = self.run
-        verdict = "FAIL" if run._failed or self._unmet else "PASS"
+        verdict = self._verdict()
         lines = [
             f"# {self.name}",
             "",
